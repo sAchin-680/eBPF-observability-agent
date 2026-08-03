@@ -1,0 +1,96 @@
+# Lima VM definition for eBPF development.
+#
+# WHY LIMA (and not Docker Desktop):
+#   eBPF programs are loaded into a kernel. Docker Desktop on macOS gives you
+#   containers inside a LinuxKit VM whose kernel you do not control: you cannot
+#   guarantee CONFIG_DEBUG_INFO_BTF=y, you cannot install a second kernel to test
+#   CO-RE portability, and a bad program can wedge the VM that also runs all your
+#   other containers. Lima gives you a disposable Ubuntu VM with a normal kernel,
+#   apt, and root. If we panic it, we delete it and start over.
+#
+# WHY UBUNTU 24.04:
+#   Ships with CONFIG_DEBUG_INFO_BTF=y (kernel type info baked into the kernel
+#   image at /sys/kernel/btf/vmlinux). That file is the entire foundation of
+#   CO-RE. Older distros without it force you back to BCC-style per-host
+#   compilation, which we explicitly rejected in ADR-004.
+#
+# ARCH NOTE:
+#   This runs arm64 natively on Apple Silicon, so it is fast. Real fleets are
+#   usually x86_64, and uprobe offsets/register ABI differ per arch. That gap is
+#   deliberately deferred to Phase 3 (multi-kernel + multi-arch matrix).
+
+vmType: "vz"
+rosetta:
+  enabled: false
+
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
+    arch: "aarch64"
+  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
+    arch: "x86_64"
+
+cpus: 4
+memory: "6GiB"
+disk: "40GiB"
+
+# Mounted at a fixed absolute path rather than under the guest home directory:
+# Lima has changed the guest username suffix between major versions
+# (`<user>.linux` -> `<user>.guest`), so a templated home path silently mounts
+# outside the real home. A fixed path is version-independent.
+mounts:
+  - location: "~/eBPF-observability-agent"
+    mountPoint: "/workspace"
+    writable: true
+
+# Ports we forward so you can hit Grafana/Tempo from the macOS browser later.
+portForwards:
+  - guestPort: 3000   # Grafana
+  - guestPort: 3200   # Tempo
+  - guestPort: 9090   # Prometheus
+  - guestPort: 8080   # sample apps
+  - guestPort: 8443
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      # -- eBPF toolchain --------------------------------------------------
+      # clang/llvm : the ONLY compilers with a BPF backend (-target bpf)
+      # libbpf-dev : userspace loader headers + bpf_helpers.h we #include
+      # linux-tools: provides bpftool, which generates vmlinux.h from BTF
+      # bpftrace   : not required, but invaluable for "is my probe even
+      #              firing?" one-liners before you write real C
+      apt-get install -y --no-install-recommends \
+        clang llvm libbpf-dev libelf-dev zlib1g-dev pkg-config \
+        linux-tools-common linux-tools-generic bpftrace \
+        build-essential make git curl jq \
+        python3 python3-pip python3-venv
+      # -- sample-app runtimes --------------------------------------------
+      curl -fsSL https://deb.nodesource.com/setup_22.x | bash - || true
+      apt-get install -y nodejs || true
+      # bpftool ships versioned; expose it on PATH
+      ln -sf "$(find /usr/lib/linux-tools* -name bpftool | head -1)" /usr/local/bin/bpftool || true
+
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      # Go from apt is often behind; install a current toolchain per-user.
+      GO_VER=1.23.4
+      ARCH=$(dpkg --print-architecture)
+      if ! /usr/local/go/bin/go version 2>/dev/null | grep -q "$GO_VER"; then
+        curl -fsSL "https://go.dev/dl/go${GO_VER}.linux-${ARCH}.tar.gz" -o /tmp/go.tgz
+        sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf /tmp/go.tgz
+      fi
+      grep -q '/usr/local/go/bin' ~/.bashrc || \
+        echo 'export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin' >> ~/.bashrc
+
+probes:
+  - description: "eBPF prerequisites present"
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      timeout 300s bash -c "until command -v clang && command -v bpftool; do sleep 3; done"
