@@ -48,8 +48,9 @@ happens at the shared library and kernel boundary, so any process on the node
 becomes observable the moment it starts — including processes started after
 the agent is already running.
 
-Full high- and low-level design, including the detailed data-path diagram,
-lives in [`docs/architecture.md`](docs/architecture.md).
+A detailed data-path diagram — kernel hook, ring buffer, userspace parser,
+correlated request record — is a Phase 1 deliverable, tracked in
+[`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ---
 
@@ -207,18 +208,20 @@ test/
 
 ## Design decisions
 
-Every non-obvious decision is recorded as an ADR in [`docs/adr/`](docs/adr/),
-with the alternatives considered and what each choice gives up.
+Non-obvious decisions are recorded as ADRs in [`docs/adr/`](docs/adr/), each
+stating the alternatives considered and what the choice gives up. They are
+written at the point the decision is made rather than collected afterwards;
+the schedule is in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 | ADR | Decision |
 | :--- | :--- |
-| [001](docs/adr/001-daemonset-not-sidecar.md) | DaemonSet rather than sidecar |
-| [002](docs/adr/002-uprobes-on-tls.md) | uprobes on TLS read/write rather than traffic mirroring |
-| [003](docs/adr/003-tracepoints-over-kprobes.md) | Tracepoints over kprobes where both exist |
-| [004](docs/adr/004-core-over-bcc.md) | CO-RE rather than BCC |
-| [005](docs/adr/005-generated-trace-ids.md) | Per-request generated trace IDs, no context propagation |
-| [006](docs/adr/006-capability-scoping.md) | `CAP_BPF` + `CAP_PERFMON` rather than `--privileged` |
-| [007](docs/adr/007-canary-rollout.md) | Canary rollout rather than fleet-wide apply |
+| 001 | DaemonSet rather than sidecar |
+| 002 | uprobes on TLS read/write rather than traffic mirroring |
+| 003 | Tracepoints over kprobes where both exist |
+| 004 | CO-RE rather than BCC |
+| 005 | Per-request generated trace IDs, no context propagation |
+| 006 | `CAP_BPF` + `CAP_PERFMON` rather than `--privileged` |
+| 007 | Canary rollout rather than fleet-wide apply |
 
 ---
 
@@ -228,11 +231,14 @@ The agent runs with elevated kernel privileges by necessity: it reads process
 memory via uprobes and requires `hostPID` in its Kubernetes deployment. It
 does not run `--privileged`.
 
-[`docs/security.md`](docs/security.md) documents the exact capability set and
-the operation each capability enables, the blast radius should the agent be
-compromised, and the data-handling posture — what is captured (method, path,
-status, timing) and what is never persisted or exported (request and response
-bodies).
+Only request metadata is captured — method, path, status, and timing. Request
+and response bodies are never persisted or exported, despite passing through
+the capture path in plaintext.
+
+A compromised agent holding these capabilities could observe plaintext traffic
+across the entire node. The exact capability set, the operation each one
+enables, and the full threat model are documented alongside the deployment
+manifests in Phase 4.
 
 ---
 
