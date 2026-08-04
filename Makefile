@@ -92,6 +92,10 @@ build: generate ## Build the agent binary
 	@CGO_ENABLED=0 $(GO) build -o bin/agent ./cmd/agent
 	@echo ">> bin/agent"
 
+.PHONY: verify-toolchain
+verify-toolchain: generate ## Load a probe into the kernel to prove the pipeline works (needs sudo)
+	@sudo env PATH=$(PATH) $(GO) test ./test/toolchain/ -v
+
 .PHONY: test
 test: ## Run Go unit tests (parser, correlation — no kernel needed)
 	@$(GO) test ./internal/... ./test/unit/...
