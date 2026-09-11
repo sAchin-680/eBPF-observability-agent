@@ -24,3 +24,12 @@ bpf/vmlinux.h
 
 # Benchmark scratch (raw results ARE committed under docs/benchmarks/)
 /tmp/
+
+# Sample application artifacts: certificates, dependencies, build output.
+# Certificates are generated locally by `make -C samples certs`; a repository
+# holding a private key teaches the wrong habit even when the key is worthless.
+samples/certs/
+samples/go-api/go-api
+samples/python-flask/.venv/
+samples/node-express/node_modules/
+samples/node-express/package-lock.json

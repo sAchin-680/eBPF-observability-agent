@@ -582,3 +582,74 @@ the printer renders the duration as unknown rather than as zero.
 **Result:** Every completed record against the same remote endpoint fell between
 27ms and 34ms, consistent with the round-trip time to that host. A correlation
 bug pairing unrelated events would produce durations unrelated to each other.
+
+---
+
+## 2026-09-12 — Sample applications
+
+### All three runtimes traced, with correlation complete
+
+**Context:** First run against three unmodified sample services rather than
+against remote endpoints.
+
+**Result:**
+
+```
+requests=84 completed=84 expired=0 unmatched-responses=0 non-http=28 pending=0
+
+gotls   comm=go-api  GET /slow       200  150.445ms
+openssl comm=python  GET /slow       200  155.812ms
+openssl comm=node    GET /slow       200  152.642ms
+gotls   comm=go-api  GET /users/999  404       75µs
+gotls   comm=go-api  GET /error      500      224µs
+```
+
+Every request matched a response, with nothing expired or unmatched.
+
+**Worth carrying forward:** the `/slow` endpoint sleeps for 150ms, and all three
+services were measured between 150.4ms and 155.8ms. That is an independent check
+on the timing path: a correlator pairing unrelated events would not reproduce a
+known duration across three separate runtimes.
+
+### Node traceability depends on how Node was built
+
+**Context:** Node was scoped out as a known gap, on the assumption that it
+bundles its own TLS. It was traced without any work.
+
+**Cause:** The distribution package splits Node into a thin executable and
+`libnode.so`, and that library links system OpenSSL:
+
+```
+/lib/aarch64-linux-gnu/libnode.so.109 imports SSL_write
+```
+
+The executable itself imports no SSL symbols at all, which is why inspecting
+`node` alone is misleading. Library-level attachment covers it for free.
+
+**But the official build does not behave that way:**
+
+```
+official node v22.11.0
+  ldd  : no libssl, no libcrypto — OpenSSL is statically linked
+  .dynsym: 6 SSL_write / SSL_read symbols defined inside the binary
+  .symtab: 2
+```
+
+**Worth carrying forward:** two things follow. First, a capability
+demonstration is only as good as the build it was demonstrated against;
+"traces Node" would have been an overclaim from this evidence alone. Second,
+the static case is not out of reach — the symbols are exported, so it needs
+per-binary attachment of the kind the Go path already does, not a new
+mechanism. The stated gap is narrower than assumed.
+
+### Inspecting the executable is not enough to find TLS
+
+**Context:** `nm -D` on the node executable reports zero SSL imports, while the
+process plainly uses OpenSSL.
+
+**Cause:** The calls come from a library the executable loads, not from the
+executable. Any check that looks only at `/proc/<pid>/exe` misses this entirely.
+
+**Worth carrying forward:** discovery has to read the process's mapped
+libraries, which is what it does. The lesson is that the executable's own
+symbol table answers a narrower question than it appears to.
