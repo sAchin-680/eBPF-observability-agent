@@ -41,6 +41,7 @@ var probes = []probe{
 // Tracer holds the loaded kernel programs and the probes attached to them.
 type Tracer struct {
 	objs     sslObjects
+	gotls    *goTracer
 	links    []link.Link
 	attached map[string]bool
 }
@@ -158,6 +159,11 @@ func (t *Tracer) Close() error {
 	}
 	if err := t.objs.Close(); err != nil && firstErr == nil {
 		firstErr = err
+	}
+	if t.gotls != nil {
+		if err := t.gotls.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 	return firstErr
 }

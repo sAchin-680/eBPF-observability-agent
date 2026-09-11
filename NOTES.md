@@ -272,3 +272,103 @@ cat: /sys/kernel/tracing/trace_pipe: Device or resource busy
 **Resolution:** Terminate stale readers before capture. This is one more reason
 the trace pipe is unsuitable as a data path: it is a single global resource
 shared with every other tracer on the host.
+
+---
+
+## 2026-09-12 — Go crypto/tls capture
+
+### A uretprobe on a Go function aborts the traced process
+
+**Context:** Establishing whether the read side of `crypto/tls.(*Conn).Read`
+could use a return probe, as the OpenSSL path does.
+
+**Symptom:** Three runs, three aborts, exit code 2. Without the probe the same
+binary exits 0 every time.
+
+```
+runtime: g 35: unexpected return pc for crypto/tls.(*Conn).Read
+         called from 0xfffffffff000
+stack: frame={sp:0x4000145bf0, fp:0x4000145c60} stack=[0x4000145000,0x4000146000)
+```
+
+**Cause:** A uretprobe replaces the return address on the stack with a kernel
+trampoline, here `0xfffffffff000`. Go's runtime walks its own stack using
+pclntab metadata and treats an unrecognised return PC as corruption.
+
+**Resolution:** Attach to the function's own RET instructions instead, leaving
+the stack untouched. On AArch64 instructions are a fixed four bytes and aligned,
+so scanning the function body for `0xd65f03c0` finds every return site exactly —
+seven in `crypto/tls.(*Conn).Read`, eight in `.Write`. The same scan on x86-64
+is not reliable: `0xc3` is one byte in a variable-length stream and occurs inside
+other instructions and inside embedded data, so return sites there need
+instruction-length decoding from the function start.
+
+**Worth carrying forward:** this is an agent crashing the application it traces,
+which is the outcome NFR3 exists to prevent. It is also not a failure the agent
+could detect — the damage is entirely in the traced process.
+
+### Goroutines migrate between OS threads mid-call
+
+**Context:** Choosing the correlation key for Go read entry and return. The
+OpenSSL path keys on the thread, which is correct there.
+
+**Symptom:** With the capture working, the write and the matching read of a
+single request appear on different threads of the same process:
+
+```
+gohold-19795  WRITE pid=19792
+gohold-19796  READ  pid=19792
+```
+
+Four distinct OS threads carried traffic for one single-request-at-a-time
+client.
+
+**Cause:** A TLS read blocks on network I/O by definition. The Go scheduler
+parks the goroutine, and it resumes on whichever thread is free.
+
+**Resolution:** Key on the goroutine rather than the thread. Go's register ABI
+keeps the current goroutine pointer in a dedicated register — `x28` on arm64,
+`r14` on x86-64 — which is stable across the migration and needs no knowledge of
+the runtime's internal struct layout, unlike reading a goroutine ID.
+
+**Worth carrying forward:** a thread-keyed implementation would still have
+appeared to work. The entry would simply not be found at return, so reads would
+be silently dropped rather than misattributed, and the write path would keep
+producing request lines. The symptom is missing responses, not an error.
+
+### Register ABI agreement between Go and C is an arm64 coincidence
+
+**Context:** Reading slice arguments from `crypto/tls.(*Conn).Write`.
+
+**Symptom:** The C argument macros returned correct values:
+
+```
+arg0=receiver  arg1=b.ptr=0x40000da000  arg2=b.len=64  arg3=b.cap=4096
+```
+
+**Cause:** On arm64 both Go's register ABI and the platform C ABI pass the first
+arguments in x0 onwards, so the macros happen to read the right registers.
+
+**Worth carrying forward:** they diverge on x86-64. Go passes in RAX, RBX, RCX
+while the C macros read RDI, RSI, RDX. The same code would read unrelated
+registers there and report plausible-looking nonsense rather than failing.
+
+### Go discovery finds unrelated system binaries
+
+**Context:** First run of Go binary discovery on the development host.
+
+**Symptom:**
+
+```
+attached /usr/local/bin/buildkitd   (go, 7 return sites)
+attached /usr/local/bin/rootlesskit (go, 7 return sites)
+attached /tmp/gohold/gohold         (go, 7 return sites)
+```
+
+**Cause:** Any Go binary importing `crypto/tls` is a valid target, and a typical
+host runs several unrelated ones.
+
+**Worth carrying forward:** correct behaviour, but it means attachment count
+scales with the number of distinct Go executables rather than with the number of
+services worth tracing. Unlike a shared library, each Go binary carries its own
+copy of crypto/tls, so there is no shared file to attach to once.
