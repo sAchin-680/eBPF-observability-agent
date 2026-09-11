@@ -91,30 +91,47 @@ func (t *Tracer) AttachGoBinaries() (int, error) {
 		return 0, nil
 	}
 
-	if t.gotls == nil {
-		gt, err := newGoTracer()
-		if err != nil {
-			return 0, err
-		}
-		t.gotls = gt
-	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
 	var n int
 	for _, target := range targets {
-		if t.attached[target.Key] {
-			continue
-		}
-		t.attached[target.Key] = true
-
-		links, err := t.gotls.attach(target)
+		ok, err := t.attachGoLocked(target)
 		if err != nil {
 			log.Printf("attach failed for %s: %v", target.Path, err)
 			continue
 		}
-		t.links = append(t.links, links...)
-		log.Printf("attached %s (pid %d, go, %d return sites)",
-			target.Path, target.PID, len(target.ReadReturnOffsets))
-		n++
+		if ok {
+			log.Printf("attached %s (pid %d, go, %d return sites)",
+				target.Path, target.PID, len(target.ReadReturnOffsets))
+			n++
+		}
 	}
 	return n, nil
+}
+
+// attachGoLocked attaches to one Go executable. The caller must hold mu.
+//
+// The Go programs are loaded on first use so that a host running no Go binaries
+// carries none of their cost.
+func (t *Tracer) attachGoLocked(target proc.GoTLSTarget) (bool, error) {
+	if t.attached[target.Key] {
+		return false, nil
+	}
+
+	if t.gotls == nil {
+		gt, err := newGoTracer()
+		if err != nil {
+			return false, err
+		}
+		t.gotls = gt
+	}
+
+	links, err := t.gotls.attach(target)
+	if err != nil {
+		return false, err
+	}
+	t.attached[target.Key] = true
+	t.links = append(t.links, links...)
+	return true, nil
 }

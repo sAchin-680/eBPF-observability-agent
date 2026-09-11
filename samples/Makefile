@@ -74,9 +74,13 @@ load: ## Sustained load for benchmarking (N=requests per endpoint)
 
 .PHONY: stop
 stop: ## Stop all services
-	@pkill -f 'go-api/go-api' 2>/dev/null || true
-	@pkill -f 'app.py' 2>/dev/null || true
-	@pkill -f 'server.js' 2>/dev/null || true
+	@# Matched on process name rather than command line: the services are
+	@# started from their own directories, so the command line is a bare
+	@# relative path that no directory-qualified pattern matches.
+	@pkill -x go-api 2>/dev/null || true
+	@pkill -f 'python.*app\.py' 2>/dev/null || true
+	@pkill -f 'node.*server\.js' 2>/dev/null || true
+	@sleep 1
 	@echo ">> stopped"
 
 .PHONY: clean

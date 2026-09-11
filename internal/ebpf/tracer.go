@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 
 	bpf "github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -42,8 +43,13 @@ var probes = []probe{
 type Tracer struct {
 	objs     sslObjects
 	gotls    *goTracer
+	discover *discoverer
 	links    []link.Link
 	attached map[string]bool
+
+	// mu guards links and attached. Attachment happens both from the startup
+	// scan and from the goroutines inspecting newly executed processes.
+	mu sync.Mutex
 }
 
 // NewTracer loads the kernel-side programs. The verifier runs during this call:
@@ -85,6 +91,13 @@ func NewTracer() (*Tracer, error) {
 // that yields no probes at all is an error, since that library cannot be
 // traced.
 func (t *Tracer) AttachLibrary(lib proc.Library) (bool, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.attachLibraryLocked(lib)
+}
+
+// attachLibraryLocked is AttachLibrary without locking. The caller must hold mu.
+func (t *Tracer) attachLibraryLocked(lib proc.Library) (bool, error) {
 	if t.attached[lib.Key] {
 		return false, nil
 	}
@@ -118,6 +131,46 @@ func (t *Tracer) AttachLibrary(lib proc.Library) (bool, error) {
 	return true, nil
 }
 
+// attachPID attaches to whatever TLS implementation one process uses, and
+// returns how many new targets were attached.
+//
+// Both the library and the Go path are attempted: they are not alternatives. A
+// Go binary can link OpenSSL for purposes other than its own HTTP client, and a
+// process can load libssl at any point rather than only at startup.
+//
+// The caller must hold mu.
+func (t *Tracer) attachPID(pid int, comm string) (int, error) {
+	var n int
+
+	libs, err := proc.TLSLibrariesForPID(pid)
+	if err == nil {
+		for _, lib := range libs {
+			ok, err := t.attachLibraryLocked(lib)
+			if err != nil {
+				log.Printf("attach failed for %s: %v", lib.Path, err)
+				continue
+			}
+			if ok {
+				log.Printf("attached %s (pid %d, %s)", lib.Path, pid, comm)
+				n++
+			}
+		}
+	}
+
+	if target, err := proc.GoTLSTargetForPID(pid); err == nil && target != nil {
+		ok, err := t.attachGoLocked(*target)
+		if err != nil {
+			log.Printf("attach failed for %s: %v", target.Path, err)
+		} else if ok {
+			log.Printf("attached %s (pid %d, %s, go, %d return sites)",
+				target.Path, pid, comm, len(target.ReadReturnOffsets))
+			n++
+		}
+	}
+
+	return n, nil
+}
+
 // AttachAll discovers every TLS library currently mapped on the host and
 // attaches to each distinct one. It returns the number of libraries attached.
 func (t *Tracer) AttachAll() (int, error) {
@@ -126,9 +179,12 @@ func (t *Tracer) AttachAll() (int, error) {
 		return 0, fmt.Errorf("discovering TLS libraries: %w", err)
 	}
 
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	var n int
 	for _, lib := range libs {
-		ok, err := t.AttachLibrary(lib)
+		ok, err := t.attachLibraryLocked(lib)
 		if err != nil {
 			log.Printf("attach failed for %s: %v", lib.Path, err)
 			continue
@@ -152,8 +208,16 @@ func (t *Tracer) AttachAll() (int, error) {
 // exit would stop tracing everything else sharing that library.
 func (t *Tracer) Close() error {
 	var firstErr error
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	for _, l := range t.links {
 		if err := l.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if t.discover != nil {
+		if err := t.discover.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}

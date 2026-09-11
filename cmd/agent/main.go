@@ -16,16 +16,6 @@ import (
 	"github.com/sAchin-680/ebpf-observability-agent/internal/ebpf"
 )
 
-// rescanInterval controls how often the agent looks for TLS libraries and Go
-// executables it has not yet attached to.
-//
-// Polling is an interim mechanism. A process that starts and exits between two
-// scans is never seen, so a short-lived client can complete its request
-// unobserved however short the interval. Closing that gap needs notification
-// rather than sampling: a tracepoint on process execution, which replaces this
-// loop.
-const rescanInterval = 500 * time.Millisecond
-
 // expireInterval controls how often unanswered requests are swept.
 const expireInterval = 5 * time.Second
 
@@ -38,29 +28,22 @@ func main() {
 	}
 	defer tracer.Close()
 
-	attach(tracer, true)
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Two mechanisms, covering disjoint sets of processes. The scan finds what
+	// is already running; the exec tracepoint reports what starts afterwards.
+	// Neither alone is sufficient, and together they leave no window.
+	if err := tracer.WatchExecs(ctx); err != nil {
+		log.Fatalf("watching process execs: %v", err)
+	}
+	attach(tracer, true)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-stop
 		cancel()
-	}()
-
-	go func() {
-		ticker := time.NewTicker(rescanInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				attach(tracer, false)
-			}
-		}
 	}()
 
 	// One correlator, driven from the reader, so no locking is needed.
@@ -97,9 +80,10 @@ func main() {
 	log.Printf("detaching")
 }
 
-// attach discovers and attaches new targets. announce distinguishes the startup
-// scan, which reports what it found, from the periodic rescan, which stays
-// silent unless something new appears.
+// attach scans for targets among processes that are already running.
+//
+// Processes starting after this point are covered by the exec tracepoint
+// instead, so this runs once rather than repeatedly.
 func attach(t *ebpf.Tracer, announce bool) {
 	n, err := t.AttachAll()
 	if err != nil && announce {
@@ -110,7 +94,7 @@ func attach(t *ebpf.Tracer, announce bool) {
 		log.Printf("go discovery: %v", err)
 	}
 	if announce {
-		log.Printf("tracing %d TLS %s and %d Go %s",
+		log.Printf("tracing %d TLS %s and %d Go %s at startup; watching for new processes",
 			n, plural(n, "library", "libraries"), g, plural(g, "binary", "binaries"))
 	}
 }

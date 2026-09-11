@@ -63,45 +63,64 @@ func FindTLSLibraries() ([]Library, error) {
 		if err != nil {
 			continue // not a process directory
 		}
-
-		f, err := os.Open(filepath.Join("/proc", e.Name(), "maps"))
+		found, err := TLSLibrariesForPID(pid)
 		if err != nil {
 			continue // exited, or not permitted
 		}
-		mappings, err := ParseMaps(f)
-		f.Close()
-		if err != nil {
-			continue
-		}
-
-		for _, m := range mappings {
-			if !isTLSLibrary(m.Path) {
+		for _, lib := range found {
+			if _, dup := seen[lib.Key]; dup {
 				continue
 			}
-			if _, dup := seen[m.Key()]; dup {
-				continue
-			}
-
-			// The path from maps is resolved inside the process's own mount
-			// namespace. For a containerised process it names a file in the
-			// container image, which either does not exist on the host or is a
-			// different build with different symbol offsets. Going through
-			// /proc/<pid>/root reaches the file the process actually mapped.
-			hostPath := filepath.Join("/proc", e.Name(), "root", m.Path)
-			if _, err := os.Stat(hostPath); err != nil {
-				continue
-			}
-
-			seen[m.Key()] = struct{}{}
-			libs = append(libs, Library{
-				Key:      m.Key(),
-				Path:     m.Path,
-				HostPath: hostPath,
-				PID:      pid,
-			})
+			seen[lib.Key] = struct{}{}
+			libs = append(libs, lib)
 		}
 	}
 
+	return libs, nil
+}
+
+// TLSLibrariesForPID returns the TLS libraries one process has loaded.
+//
+// A process is inspected rather than searched for: the libraries it actually
+// mapped are recorded by the kernel, and asking it is both cheaper and more
+// accurate than guessing from the filesystem.
+func TLSLibrariesForPID(pid int) ([]Library, error) {
+	dir := strconv.Itoa(pid)
+
+	f, err := os.Open(filepath.Join("/proc", dir, "maps"))
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	mappings, err := ParseMaps(f)
+	if err != nil {
+		return nil, err
+	}
+
+	var libs []Library
+	for _, m := range mappings {
+		if !isTLSLibrary(m.Path) {
+			continue
+		}
+
+		// The path from maps is resolved inside the process's own mount
+		// namespace. For a containerised process it names a file in the
+		// container image, which either does not exist on the host or is a
+		// different build with different symbol offsets. Going through
+		// /proc/<pid>/root reaches the file the process actually mapped.
+		hostPath := filepath.Join("/proc", dir, "root", m.Path)
+		if _, err := os.Stat(hostPath); err != nil {
+			continue
+		}
+
+		libs = append(libs, Library{
+			Key:      m.Key(),
+			Path:     m.Path,
+			HostPath: hostPath,
+			PID:      pid,
+		})
+	}
 	return libs, nil
 }
 

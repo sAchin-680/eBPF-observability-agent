@@ -165,42 +165,52 @@ func FindGoTLSTargets() ([]GoTLSTarget, error) {
 			continue
 		}
 
-		// The executable is reached through /proc rather than by its reported
-		// path: the path is meaningful only inside the process's own mount
-		// namespace, and the file may have been replaced or unlinked since the
-		// process started. This link always refers to the running image.
-		exe := filepath.Join("/proc", e.Name(), "exe")
-		fi, err := os.Stat(exe)
-		if err != nil {
+		t, err := GoTLSTargetForPID(pid)
+		if err != nil || t == nil {
 			continue
 		}
-
-		key, ok := fileKey(fi)
-		if !ok {
+		if _, dup := seen[t.Key]; dup {
 			continue
 		}
-		if _, dup := seen[key]; dup {
-			continue
-		}
-		if !IsGoBinary(exe) {
-			seen[key] = struct{}{}
-			continue
-		}
-
-		t, err := InspectGoBinary(exe)
-		seen[key] = struct{}{}
-		if err != nil {
-			continue // not a TLS client, or stripped
-		}
-
-		t.Key = key
-		t.PID = pid
-		t.HostPath = exe
-		if link, err := os.Readlink(exe); err == nil {
-			t.Path = link
-		}
+		seen[t.Key] = struct{}{}
 		out = append(out, *t)
 	}
 
 	return out, nil
+}
+
+// GoTLSTargetForPID inspects one process. It returns nil without error when the
+// process is not a Go binary using crypto/tls, which is the common case.
+func GoTLSTargetForPID(pid int) (*GoTLSTarget, error) {
+	dir := strconv.Itoa(pid)
+
+	// The executable is reached through /proc rather than by its reported
+	// path: the path is meaningful only inside the process's own mount
+	// namespace, and the file may have been replaced or unlinked since the
+	// process started. This link always refers to the running image.
+	exe := filepath.Join("/proc", dir, "exe")
+	fi, err := os.Stat(exe)
+	if err != nil {
+		return nil, err
+	}
+	key, ok := fileKey(fi)
+	if !ok {
+		return nil, nil
+	}
+	if !IsGoBinary(exe) {
+		return nil, nil
+	}
+
+	t, err := InspectGoBinary(exe)
+	if err != nil {
+		return nil, nil // not a TLS client, or stripped
+	}
+
+	t.Key = key
+	t.PID = pid
+	t.HostPath = exe
+	if target, err := os.Readlink(exe); err == nil {
+		t.Path = target
+	}
+	return t, nil
 }
