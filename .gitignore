@@ -29,6 +29,7 @@ bpf/vmlinux.h
 # Certificates are generated locally by `make -C samples certs`; a repository
 # holding a private key teaches the wrong habit even when the key is worthless.
 samples/certs/
+samples/logs/
 samples/go-api/go-api
 samples/python-flask/.venv/
 samples/node-express/node_modules/

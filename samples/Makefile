@@ -2,6 +2,10 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 CERT_DIR := certs
+# Logs live beside the services rather than in /tmp: the demo runs the agent as
+# root while the services may be started as either user, and a log file left in
+# a shared directory by one owner cannot be written by the other.
+LOG_DIR  := logs
 GO       ?= go
 CURL     := curl -sk --http1.1
 
@@ -34,11 +38,15 @@ deps: ## Install Python and Node dependencies
 build: ## Build the Go service
 	@cd go-api && $(GO) mod tidy >/dev/null 2>&1 && $(GO) build -o go-api .
 
+.PHONY: prepare
+prepare: certs deps build ## Install dependencies, build, and generate certificates
+
 .PHONY: run
-run: certs build ## Start all three services in the background
-	@cd go-api        && setsid ./go-api                 > /tmp/go-api.log      2>&1 < /dev/null &
-	@cd python-flask  && setsid .venv/bin/python app.py  > /tmp/flask.log       2>&1 < /dev/null &
-	@cd node-express  && setsid node server.js           > /tmp/node.log        2>&1 < /dev/null &
+run: certs ## Start all three services in the background (run `prepare` first)
+	@mkdir -p $(LOG_DIR)
+	@cd go-api       && setsid ./go-api                > ../$(LOG_DIR)/go-api.log       2>&1 < /dev/null &
+	@cd python-flask && setsid .venv/bin/python app.py > ../$(LOG_DIR)/python-flask.log 2>&1 < /dev/null &
+	@cd node-express && setsid node server.js          > ../$(LOG_DIR)/node-express.log 2>&1 < /dev/null &
 	@sleep 3
 	@$(MAKE) --no-print-directory status
 
@@ -48,7 +56,7 @@ status: ## Report which services are responding
 	  port=$${p%%:*}; name=$${p##*:}; \
 	  if $(CURL) --max-time 2 https://localhost:$$port/health >/dev/null 2>&1; \
 	    then echo "  up    $$name (:$$port)"; \
-	    else echo "  DOWN  $$name (:$$port) — see /tmp/$$name.log"; fi; \
+	    else echo "  DOWN  $$name (:$$port) — see samples/$(LOG_DIR)/$$name.log"; fi; \
 	done
 
 .PHONY: traffic
@@ -85,4 +93,4 @@ stop: ## Stop all services
 
 .PHONY: clean
 clean: stop ## Stop services and remove build artifacts
-	@rm -rf $(CERT_DIR) go-api/go-api python-flask/.venv node-express/node_modules
+	@rm -rf $(CERT_DIR) $(LOG_DIR) go-api/go-api python-flask/.venv node-express/node_modules

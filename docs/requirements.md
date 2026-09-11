@@ -33,13 +33,13 @@ the value of what is.
 
 | ID | Requirement | Verified by |
 | :--- | :--- | :--- |
-| FR1 | Attach uprobes to `SSL_write` and `SSL_read` in OpenSSL, and to Go's `crypto/tls` write and read paths | pending |
-| FR2 | Attach kprobes or tracepoints to correlate captured payloads with socket 4-tuples | pending |
-| FR3 | Parse HTTP/1.1 method, path, status code, and timing from captured byte chunks | pending |
-| FR4 | Reconstruct one logical request/response record per exchange | pending |
+| FR1 | Attach uprobes to `SSL_write` and `SSL_read` in OpenSSL, and to Go's `crypto/tls` write and read paths | met — all four OpenSSL entry points probed, since callers are split between the original and `_ex` APIs; Go probed at its return instructions, because a return probe aborts the Go runtime |
+| FR2 | Attach kprobes or tracepoints to correlate captured payloads with socket 4-tuples | met — endpoints resolved for every record in the verification run, IPv4 and IPv6 |
+| FR3 | Parse HTTP/1.1 method, path, status code, and timing from captured byte chunks | met — `internal/httpparse`, 24 unit tests and a fuzz target |
+| FR4 | Reconstruct one logical request/response record per exchange | met — `internal/correlate`, 9 unit tests; 84 of 84 requests correlated across three runtimes |
 | FR5 | Convert request records into OpenTelemetry spans with an inferred service name | pending |
 | FR6 | Export spans to Tempo, and rate/error/duration metrics to Prometheus or Mimir | pending |
-| FR7 | Detect traced process restarts and re-attach automatically | pending |
+| FR7 | Detect traced process restarts and re-attach automatically | partial — new processes are attached via `sched_process_exec`, verified with services started after the agent; a restart-specific test is pending |
 | FR8 | Fail closed with a clear error on kernels lacking BTF or CO-RE support, without destabilizing the node | partial — `scripts/check-env.sh` and the `vmlinux` target fail closed with a diagnostic; agent-side handling pending |
 
 ## Non-functional requirements
@@ -47,7 +47,7 @@ the value of what is.
 | ID | Requirement | Verified by |
 | :--- | :--- | :--- |
 | NFR1 | Overhead is measured rather than assumed: p50/p95/p99 latency delta at increasing request rates | pending |
-| NFR2 | Ring buffer drop rate is observable and logged; events are never dropped silently | pending |
+| NFR2 | Ring buffer drop rate is observable and logged; events are never dropped silently | met — counter verified by forcing drops with a reduced buffer |
 | NFR3 | An agent crash does not affect the traced application, demonstrated by test rather than by argument | pending |
 | NFR4 | No `--privileged`. Capabilities scoped to `CAP_BPF` and `CAP_PERFMON`, or `CAP_SYS_ADMIN` on older kernels, documented per operation | pending |
 | NFR5 | One compiled binary runs unmodified across all tested kernel versions | partial — `test/toolchain` proves CO-RE relocation on kernel 6.8; multi-kernel matrix pending |
