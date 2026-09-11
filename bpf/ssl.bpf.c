@@ -23,6 +23,7 @@
 #include <bpf/bpf_tracing.h>
 
 #include "capture.h"
+#include "conn.h"
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
@@ -101,6 +102,7 @@ static __always_inline int stash_read(void *ssl, void *buf, void *count_ptr)
 SEC("uprobe/SSL_write")
 int BPF_UPROBE(probe_ssl_write, void *ssl, const void *buf, int num)
 {
+	mark_active_conn((__u64)ssl);
 	if (num > 0)
 		emit(DIR_EGRESS, (__u64)ssl, buf, (__u64)num);
 	return 0;
@@ -116,6 +118,7 @@ int BPF_UPROBE(probe_ssl_write, void *ssl, const void *buf, int num)
 SEC("uprobe/SSL_write_ex")
 int BPF_UPROBE(probe_ssl_write_ex, void *ssl, const void *buf, __u64 num)
 {
+	mark_active_conn((__u64)ssl);
 	emit(DIR_EGRESS, (__u64)ssl, buf, num);
 	return 0;
 }

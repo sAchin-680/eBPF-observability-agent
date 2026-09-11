@@ -29,6 +29,7 @@
 #include <bpf/bpf_tracing.h>
 
 #include "capture.h"
+#include "conn.h"
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
@@ -81,6 +82,7 @@ static __always_inline void emit_go(__u8 direction, __u64 conn, const void *buf,
 SEC("uprobe/go_tls_write")
 int BPF_UPROBE(probe_go_tls_write, void *conn, const void *buf, __u64 len)
 {
+	mark_active_conn((__u64)conn);
 	emit_go(DIR_EGRESS, (__u64)conn, buf, len);
 	return 0;
 }

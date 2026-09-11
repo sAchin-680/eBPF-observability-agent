@@ -60,6 +60,14 @@ type Record struct {
 	Source  capture.Source
 	Conn    uint64
 	Outcome Outcome
+
+	// Peer is the remote endpoint of the connection, when the socket hook
+	// observed it. Empty when it did not: a connection whose first write has
+	// not yet happened, an evicted entry, or a kernel where the socket probe
+	// could not attach.
+	Peer string
+	// Local is the local endpoint, under the same conditions.
+	Local string
 }
 
 // connKey scopes a connection pointer to its process.
@@ -91,8 +99,13 @@ type Stats struct {
 //
 // It is not safe for concurrent use; the agent drives it from a single reader.
 type Correlator struct {
-	ttl     time.Duration
-	emit    func(Record)
+	ttl  time.Duration
+	emit func(Record)
+
+	// endpoints resolves a connection to its socket addresses. Optional: when
+	// nil, records carry no endpoints and everything else is unaffected.
+	endpoints func(pid uint32, conn uint64) (local, peer string, ok bool)
+
 	pending map[connKey]pending
 	stats   Stats
 
@@ -100,6 +113,11 @@ type Correlator struct {
 	// time rather than wall-clock time so that behaviour is reproducible in
 	// tests and unaffected by how long userspace took to drain the buffer.
 	now time.Duration
+}
+
+// SetEndpointResolver supplies a lookup from connection to socket addresses.
+func (c *Correlator) SetEndpointResolver(f func(pid uint32, conn uint64) (local, peer string, ok bool)) {
+	c.endpoints = f
 }
 
 // New returns a Correlator that calls emit for each completed or expired record.
@@ -181,6 +199,11 @@ func (c *Correlator) emitRecord(req pending, resp httpparse.Message, d time.Dura
 	if c.emit == nil {
 		return
 	}
+	var local, peer string
+	if c.endpoints != nil {
+		local, peer, _ = c.endpoints(req.ev.PID, req.ev.Conn)
+	}
+
 	c.emit(Record{
 		Method:   req.msg.Method,
 		Path:     req.msg.Path,
@@ -193,5 +216,7 @@ func (c *Correlator) emitRecord(req pending, resp httpparse.Message, d time.Dura
 		Source:   req.ev.Source,
 		Conn:     req.ev.Conn,
 		Outcome:  o,
+		Local:    local,
+		Peer:     peer,
 	})
 }

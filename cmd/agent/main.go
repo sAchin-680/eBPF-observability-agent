@@ -48,6 +48,13 @@ func main() {
 
 	// One correlator, driven from the reader, so no locking is needed.
 	corr := correlate.New(correlate.DefaultTTL, printRecord)
+	corr.SetEndpointResolver(func(pid uint32, conn uint64) (string, string, bool) {
+		t, ok := tracer.LookupTuple(pid, conn)
+		if !ok {
+			return "", "", false
+		}
+		return t.Source.String(), t.Destination.String(), true
+	})
 
 	// Expiry runs on a timer because an unanswered request is only detectable
 	// by the absence of a response, which produces no event to react to.
@@ -115,9 +122,14 @@ func printRecord(r correlate.Record) {
 		host = "-"
 	}
 
-	fmt.Printf("%-7s pid=%-7d comm=%-15s %-7s %-26s %-7s %8s  host=%s\n",
-		r.Source, r.PID, r.Comm, r.Method, truncate(r.Path, 26), status,
-		formatDuration(r.Duration), host)
+	peer := r.Peer
+	if peer == "" {
+		peer = "-"
+	}
+
+	fmt.Printf("%-7s pid=%-7d comm=%-15s %-7s %-24s %-7s %9s  peer=%-21s host=%s\n",
+		r.Source, r.PID, r.Comm, r.Method, truncate(r.Path, 24), status,
+		formatDuration(r.Duration), peer, host)
 }
 
 // formatDuration renders the request duration. An expired record has no

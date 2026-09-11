@@ -44,8 +44,15 @@ type Tracer struct {
 	objs     sslObjects
 	gotls    *goTracer
 	discover *discoverer
+	sock     *sockTracer
 	links    []link.Link
 	attached map[string]bool
+
+	// sharedOpts carries the map replacements that bind the separately
+	// compiled programs to one set of shared maps. Nil when the socket program
+	// failed to load, in which case each program uses its own maps and the
+	// connection binding simply never happens.
+	sharedOpts *bpf.CollectionOptions
 
 	// mu guards links and attached. Attachment happens both from the startup
 	// scan and from the goroutines inspecting newly executed processes.
@@ -63,8 +70,19 @@ func NewTracer() (*Tracer, error) {
 		return nil, fmt.Errorf("raising memlock limit: %w", err)
 	}
 
+	// The socket program is loaded first because it owns the maps the TLS
+	// programs share. Its failure is not fatal: without it, records carry no
+	// network endpoints, which is a smaller loss than not tracing at all.
+	var opts *bpf.CollectionOptions
+	sock, err := newSockTracer()
+	if err != nil {
+		log.Printf("socket endpoints unavailable: %v", err)
+	} else {
+		opts = &bpf.CollectionOptions{MapReplacements: sock.sharedMaps()}
+	}
+
 	var objs sslObjects
-	if err := loadSslObjects(&objs, nil); err != nil {
+	if err := loadSslObjects(&objs, opts); err != nil {
 		// A verifier rejection carries an instruction-level log of the register
 		// state that caused it. Anything less is not diagnosable.
 		var ve *bpf.VerifierError
@@ -74,7 +92,12 @@ func NewTracer() (*Tracer, error) {
 		return nil, fmt.Errorf("loading programs: %w", err)
 	}
 
-	return &Tracer{objs: objs, attached: make(map[string]bool)}, nil
+	return &Tracer{
+		objs:       objs,
+		sock:       sock,
+		sharedOpts: opts,
+		attached:   make(map[string]bool),
+	}, nil
 }
 
 // AttachLibrary attaches the capture probes to one TLS library. It reports
@@ -218,6 +241,11 @@ func (t *Tracer) Close() error {
 	}
 	if t.discover != nil {
 		if err := t.discover.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if t.sock != nil {
+		if err := t.sock.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}

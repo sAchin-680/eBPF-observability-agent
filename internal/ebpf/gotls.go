@@ -18,9 +18,9 @@ type goTracer struct {
 	objs gotlsObjects
 }
 
-func newGoTracer() (*goTracer, error) {
+func newGoTracer(opts *bpf.CollectionOptions) (*goTracer, error) {
 	var objs gotlsObjects
-	if err := loadGotlsObjects(&objs, nil); err != nil {
+	if err := loadGotlsObjects(&objs, opts); err != nil {
 		var ve *bpf.VerifierError
 		if errors.As(err, &ve) {
 			return nil, fmt.Errorf("verifier rejected Go programs:\n%+v", ve)
@@ -120,7 +120,7 @@ func (t *Tracer) attachGoLocked(target proc.GoTLSTarget) (bool, error) {
 	}
 
 	if t.gotls == nil {
-		gt, err := newGoTracer()
+		gt, err := newGoTracer(t.sharedOpts)
 		if err != nil {
 			return false, err
 		}

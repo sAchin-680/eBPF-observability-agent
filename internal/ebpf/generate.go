@@ -19,3 +19,4 @@ package ebpf
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -target native -cflags "-O2 -g -Wall -Werror -I../../bpf" ssl ../../bpf/ssl.bpf.c
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -target native -cflags "-O2 -g -Wall -Werror -I../../bpf" gotls ../../bpf/gotls.bpf.c
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -target native -cflags "-O2 -g -Wall -Werror -I../../bpf" discover ../../bpf/discover.bpf.c
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -target native -cflags "-O2 -g -Wall -Werror -I../../bpf" sock ../../bpf/sock.bpf.c
