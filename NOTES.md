@@ -653,3 +653,69 @@ executable. Any check that looks only at `/proc/<pid>/exe` misses this entirely.
 **Worth carrying forward:** discovery has to read the process's mapped
 libraries, which is what it does. The lesson is that the executable's own
 symbol table answers a narrower question than it appears to.
+
+---
+
+## 2026-09-12 — Process discovery
+
+### Polling replaced with a tracepoint on process execution
+
+**Context:** Discovery ran on a 500ms timer. A process that starts and exits
+between two scans is never observed, and no interval closes that window — a
+short-lived client completes a request in less time than any practical scan
+period.
+
+**Resolution:** A tracepoint on `sched_process_exec` reports every exec. The
+startup scan is kept for processes already running; the two cover disjoint sets
+and together leave no gap.
+
+**Verified with the sample services absent at startup and started afterwards:**
+
+```
+03:10:45 tracing 1 TLS library and 2 Go binaries at startup; watching for new processes
+03:10:52 attached .../samples/go-api/go-api (pid 32066, go, 7 return sites)
+
+requests=48 completed=48 expired=0 unmatched-responses=0 non-http=16 pending=0
+```
+
+The startup line shows only unrelated system binaries. The attachment seven
+seconds later is the tracepoint firing for a process that did not exist when the
+agent started.
+
+**Hook choice:** the tracepoint rather than a kprobe on the kernel's exec
+implementation. Tracepoints are an interface the kernel commits to keeping;
+the internal functions behind exec are not, and have been renamed across
+releases. A kprobe would load on the kernel it was written against and silently
+fail to attach elsewhere, defeating the portability CO-RE provides. This is
+ADR-003 applied.
+
+### A process has no shared libraries at the moment it execs
+
+**Context:** Inspecting a process immediately on notification found no libssl,
+even for processes that plainly load it.
+
+**Cause:** At exec the new image is mapped but its libraries are not. The
+dynamic linker runs afterwards, as the process's own first instructions.
+
+**Resolution:** Inspection is delayed briefly and retried a few times.
+
+**Worth carrying forward:** the delay is a compromise, not a fix, and waiting
+longer does not solve it. A library can be loaded at any point in a process's
+life — a runtime that opens its first HTTPS connection minutes after starting
+maps libssl then, not at exec. Covering that properly needs a hook on library
+loading rather than on process creation.
+
+### Stopping a process by command-line pattern matched nothing
+
+**Context:** A test intended to start with no sample services running began with
+one still alive, which invalidated the result until noticed.
+
+**Symptom:** `pkill -f 'go-api/go-api'` matched nothing. The service is started
+from its own directory, so its command line is `./go-api` and no
+directory-qualified pattern matches it.
+
+**Resolution:** Match on process name with `pkill -x`.
+
+**Worth carrying forward:** the test reported success while measuring the wrong
+thing. Verifying the precondition — that nothing was running — is what caught it,
+and the second run asserts that precondition explicitly before proceeding.
