@@ -209,3 +209,66 @@ crypto/tls.(*Conn).Write / .Read: 2
 **Resolution:** None required; this is the expected result and the reason Go
 needs an independent attach strategy against `crypto/tls` symbols in the
 application binary itself.
+
+### Hardcoded library paths miss processes loading their own copy
+
+**Context:** Verifying that path-based library discovery was insufficient.
+
+**Symptom:** With the agent attached, one of two identical requests was
+captured. The second produced nothing and no error.
+
+```
+inode 3188    /usr/lib/aarch64-linux-gnu/libssl.so.3
+inode 541016  /opt/customssl/libssl.so.3
+```
+
+**Cause:** Discovery searched a fixed list of distribution paths and attached to
+the first match. A uprobe is placed in a file, identified by inode, so a process
+loading a different copy of the same library is not covered by that attachment.
+`LD_LIBRARY_PATH`, bundled runtimes, and container images all produce this.
+
+**Resolution:** Read `/proc/<pid>/maps` and attach per distinct `(device,
+inode)`. Paths are opened through `/proc/<pid>/root` so that a path meaningful
+only inside another mount namespace still resolves.
+
+**Worth carrying forward:** deduplication must key on the file, not the path.
+`/lib` and `/usr/lib` are the same directory on Debian and Ubuntu, so the same
+library appears under two names and would otherwise be probed twice, doubling
+every captured event.
+
+### A one-shot /proc scan cannot see processes that start later
+
+**Context:** After switching to `/proc`-based discovery, a short-lived client
+using the non-standard library was still missed.
+
+**Symptom:** The library appeared in no scan, because the process started after
+the agent's only scan and exited before any later one.
+
+**Cause:** Sampling. Discovery ran once at startup.
+
+**Resolution:** Interim periodic rescan. This narrows the window but cannot
+close it: a process that starts and exits between two scans is never observed,
+whatever the interval. Closing it requires notification rather than sampling,
+via a tracepoint on process execution.
+
+**Worth carrying forward:** verifying discovery needs a long-lived process
+holding the library open before the agent starts, otherwise the test measures
+scan timing rather than discovery correctness.
+
+### The kernel trace pipe accepts only one reader
+
+**Context:** A verification run captured nothing, with the agent attached and
+traffic flowing.
+
+**Symptom:**
+
+```
+cat: /sys/kernel/tracing/trace_pipe: Device or resource busy
+```
+
+**Cause:** A reader left running by an earlier run still held the pipe.
+`trace_pipe` is a consuming, single-reader interface.
+
+**Resolution:** Terminate stale readers before capture. This is one more reason
+the trace pipe is unsuitable as a data path: it is a single global resource
+shared with every other tracer on the host.
