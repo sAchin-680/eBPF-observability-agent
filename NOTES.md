@@ -96,3 +96,116 @@ exposes as a map named `.bss`. `bpf2go` generates no binding for it, because
 **Resolution:** Declared an explicit `BPF_MAP_TYPE_ARRAY` with `SEC(".maps")`
 instead. This also exercises map creation, which the ring buffer data path
 depends on.
+
+---
+
+## 2026-09-12 — OpenSSL capture path
+
+### Probe arguments cannot be compiled for a generic BPF target
+
+**Context:** First build of the SSL uprobes with `bpf2go -target bpfel`.
+
+**Symptom:**
+
+```
+error: The eBPF is using target specific macros, please provide -target that is
+not bpf, bpfel or bpfeb
+  note: expanded from macro 'BPF_UPROBE' ... 'PT_REGS_PARM1'
+```
+
+**Cause:** A uprobe receives the CPU register state at the call site, so
+reading argument *n* means reading whichever register the platform ABI assigns
+to it. `PT_REGS_PARMn` resolves that per architecture and refuses to compile
+when the architecture is unknown. A generic little-endian BPF target therefore
+cannot build any program that reads probe arguments.
+
+**Resolution:** Named architectures instead. Naming a foreign architecture then
+failed differently:
+
+```
+error: no member named 'di' in 'struct pt_regs'
+```
+
+`bpf/vmlinux.h` is generated from the running kernel's BTF, so `struct pt_regs`
+carries the host layout — `di` is an x86 register name absent from the arm64
+definition. Cross-architecture builds need a `vmlinux.h` per architecture, not
+merely a per-architecture target. Settled on `-target native`; multi-architecture
+release artifacts are deferred to deployment packaging.
+
+### curl negotiates HTTP/2, so the first captured payload was not HTTP/1.1
+
+**Context:** First successful capture, expecting an HTTP/1.1 request line.
+
+**Symptom:**
+
+```
+WRITE len=64 data=PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n
+WRITE len=37 data=
+READ  len=568 data=
+```
+
+**Cause:** curl negotiated HTTP/2 over ALPN. The first payload is the HTTP/2
+connection preface; everything after is binary framing with HPACK-compressed
+headers, so `%s` terminated immediately on a non-printable byte.
+
+**Resolution:** `curl --http1.1` for capture testing.
+
+**Worth carrying forward:** this is direct evidence for the HTTP/2 scope
+exclusion. There is no request line to find in a single buffer — header state
+lives in a compression context shared across frames and across requests on the
+same connection. Protocol negotiation is also invisible from the probe, so an
+agent cannot assume HTTP/1.1 simply because port 443 is in use.
+
+### CPython calls SSL_write_ex and SSL_read_ex, not SSL_write and SSL_read
+
+**Context:** curl traced correctly; Python produced no events at all.
+
+**Symptom:** No events for `comm=python3`, despite the request succeeding and
+Python loading the same library:
+
+```
+inode 3188  /lib/aarch64-linux-gnu/libssl.so.3
+inode 3188  /usr/lib/aarch64-linux-gnu/libssl.so.3
+```
+
+**Cause:** The probes were attached correctly; CPython 3.12 simply calls
+different functions.
+
+```
+python _ssl.so:  U SSL_read_ex@OPENSSL_3.0.0
+                 U SSL_write_ex@OPENSSL_3.0.0
+curl:            neither — uses SSL_write / SSL_read
+```
+
+OpenSSL 1.1.1 added the `_ex` variants and callers are split between the two
+APIs. The unprobed symbols are still present in the library, so nothing reports
+a missing symbol and nothing errors. The failure is silent.
+
+**Resolution:** Probe all four entry points.
+
+`SSL_read_ex` needed more than a second probe: it returns 1 or 0 for success or
+failure and writes the byte count through an out-parameter, so the return probe
+must carry the `readbytes` pointer across from entry and read it back out of the
+traced process. The stash value became a struct rather than a bare address.
+
+**Worth carrying forward:** "one hook per TLS library" is already wrong within a
+single library. It is one hook per API variant, and the cost of missing one is
+silence rather than an error.
+
+### Go binaries contain no OpenSSL at all
+
+**Context:** Confirming the expected negative result for Go.
+
+**Symptom:** A working Go HTTPS client produced zero events.
+
+**Cause:** Go implements TLS in pure Go and links no OpenSSL:
+
+```
+ldd: linux-vdso.so.1, libc.so.6, ld-linux-aarch64.so.1
+SSL_ symbols: 0
+crypto/tls.(*Conn).Write / .Read: 2
+```
+
+**Resolution:** None required; this is the expected result and the reason Go
+needs an independent attach strategy against `crypto/tls` symbols in the
+application binary itself.

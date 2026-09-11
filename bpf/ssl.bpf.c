@@ -1,37 +1,223 @@
+/*
+ * OpenSSL TLS payload capture.
+ *
+ * Hooks the read and write entry points in libssl. Both handle plaintext:
+ * encryption happens inside the write path after the caller's buffer is handed
+ * over, and decryption completes inside the read path before the caller's
+ * buffer is filled. Probing at these boundaries yields cleartext HTTP without
+ * terminating TLS, manipulating certificates, or modifying the traced process.
+ *
+ * Four entry points are covered, not two. OpenSSL 1.1.1 added SSL_write_ex and
+ * SSL_read_ex, and callers are split between the two APIs: curl uses the
+ * original pair, CPython 3.12 uses the _ex pair exclusively. Probing only the
+ * original pair silently misses every caller that adopted the newer API, with
+ * no error and no missing symbol to diagnose.
+ *
+ * Output goes to the kernel trace pipe. That is a debugging channel, not a data
+ * path: it is global, rate limited, and lossy. It is replaced by a ring buffer
+ * once the capture path is proven.
+ */
+
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
-char LICENSE[] SEC("license") = "Dual BSD/GPL"
+char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
-#define MAX_DATA
-struct event { 
-    __u32 pid; 
-    __u8 comm[16]; 
-    __32 len;
-    __u8 data[MAX_DATA];
+/*
+ * Bytes copied from the caller's buffer per call.
+ *
+ * A BPF program has 512 bytes of stack in total. This buffer, the comm array,
+ * and everything else live within that budget, so the limit is a structural
+ * constraint rather than a tuning choice. 256 bytes covers an HTTP/1.1 request
+ * line and the first headers, which is all this stage requires; a full request
+ * is not reconstructed in kernel space.
+ */
+#define MAX_DATA 256
+
+/*
+ * State carried from a read entry probe to its return probe.
+ *
+ * The read paths are not symmetric with the write paths. A write call's buffer
+ * holds the payload on entry. A read call receives an empty destination buffer
+ * and fills it before returning, so the payload exists only at return. A return
+ * probe does not receive the original arguments, so the destination address
+ * must be carried across.
+ *
+ * The two read APIs report length differently:
+ *
+ *   ssize_t SSL_read   (SSL *ssl, void *buf, int num);
+ *   int     SSL_read_ex(SSL *ssl, void *buf, size_t num, size_t *readbytes);
+ *
+ * SSL_read returns the byte count directly. SSL_read_ex returns 1 or 0 for
+ * success or failure and writes the count through an out-parameter, so that
+ * pointer must be carried across as well; it is unused by the SSL_read path.
+ */
+struct read_args {
+	__u64 buf;       /* destination buffer in the traced process */
+	__u64 count_ptr; /* where SSL_read_ex will write the byte count */
 };
 
+/*
+ * In-flight read calls, awaiting return.
+ *
+ * The key is the value returned by bpf_get_current_pid_tgid(), which packs the
+ * thread ID and the process ID. A thread executes one call at a time, so it can
+ * have at most one read outstanding, making the thread the correct unit of
+ * identity. Keying on the process instead would let concurrent threads in the
+ * same process overwrite each other's entries, producing payloads attributed to
+ * the wrong call under load while appearing correct when a single request is in
+ * flight.
+ */
 struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __unint(max_entries, 1024);
-} events SEC(".maps");
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 10240);
+	__type(key, __u64);
+	__type(value, struct read_args);
+} ssl_read_args SEC(".maps");
 
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 1024);
-    __type(key,);
-    __type(value,);
-} ssl_read_bufs SEC(".maps");
+/*
+ * Copies up to MAX_DATA bytes out of the traced process and emits them.
+ *
+ * The buffer address belongs to another address space and cannot be
+ * dereferenced: the page may not be resident, and the verifier rejects direct
+ * access. bpf_probe_read_user performs the copy and reports failure rather than
+ * faulting.
+ */
+static __always_inline void emit(const char *dir, const void *buf, __u64 len)
+{
+	__u64 id = bpf_get_current_pid_tgid();
+	__u32 tgid = id >> 32;
+	char comm[16];
+	char data[MAX_DATA];
+	__u32 n;
 
-// ---- WRITE: easy half ---- 
+	if (len == 0)
+		return;
+
+	/* Clearing first guarantees a terminator for the %s conversion below,
+	 * whatever the copy length turns out to be. */
+	__builtin_memset(&data, 0, sizeof(data));
+
+	/* The explicit upper bound keeps the copy length provably within the
+	 * destination, which the verifier requires before permitting the call. */
+	if (len > MAX_DATA - 1)
+		n = MAX_DATA - 1;
+	else
+		n = (__u32)len;
+
+	if (bpf_probe_read_user(&data, n, buf) != 0)
+		return;
+
+	bpf_get_current_comm(&comm, sizeof(comm));
+	bpf_printk("%s pid=%d comm=%s", dir, tgid, comm);
+	bpf_printk("%s len=%llu data=%s", dir, len, data);
+}
+
+/* Records read state for the matching return probe. */
+static __always_inline int stash_read(void *buf, void *count_ptr)
+{
+	__u64 id = bpf_get_current_pid_tgid();
+	struct read_args args = {
+		.buf = (__u64)buf,
+		.count_ptr = (__u64)count_ptr,
+	};
+
+	bpf_map_update_elem(&ssl_read_args, &id, &args, BPF_ANY);
+	return 0;
+}
+
+/*
+ * int SSL_write(SSL *ssl, const void *buf, int num)
+ *
+ * The payload is present on entry, so no return probe is required. num is the
+ * caller's requested length rather than the number of bytes actually written;
+ * a short write would be reported here as its full requested size.
+ */
 SEC("uprobe/SSL_write")
 int BPF_UPROBE(probe_ssl_write, void *ssl, const void *buf, int num)
 {
-    return 0;
+	if (num > 0)
+		emit("WRITE", buf, (__u64)num);
+	return 0;
 }
 
+/*
+ * int SSL_write_ex(SSL *ssl, const void *buf, size_t num, size_t *written)
+ *
+ * The payload is likewise present on entry. The actual count is only available
+ * through *written at return, but the requested length is sufficient to locate
+ * the request line at this stage.
+ */
+SEC("uprobe/SSL_write_ex")
+int BPF_UPROBE(probe_ssl_write_ex, void *ssl, const void *buf, __u64 num)
+{
+	emit("WRITE", buf, num);
+	return 0;
+}
 
-// ---- READ ----
+/* ssize_t SSL_read(SSL *ssl, void *buf, int num) */
 SEC("uprobe/SSL_read")
-int BPF_UPROBE(prove_ssl)
+int BPF_UPROBE(probe_ssl_read_entry, void *ssl, void *buf, int num)
+{
+	return stash_read(buf, NULL);
+}
+
+/*
+ * Return from SSL_read. The return value is the number of bytes decrypted into
+ * the buffer recorded on entry; zero or negative indicates no payload.
+ *
+ * The map entry is deleted on every path, including error paths. An entry left
+ * behind by a call that errored would accumulate for the lifetime of a
+ * long-running process until the map filled.
+ */
+SEC("uretprobe/SSL_read")
+int BPF_URETPROBE(probe_ssl_read_ret, int ret)
+{
+	__u64 id = bpf_get_current_pid_tgid();
+	struct read_args *args;
+
+	args = bpf_map_lookup_elem(&ssl_read_args, &id);
+	if (!args)
+		return 0;
+
+	if (ret > 0)
+		emit("READ", (void *)args->buf, (__u64)ret);
+
+	bpf_map_delete_elem(&ssl_read_args, &id);
+	return 0;
+}
+
+/* int SSL_read_ex(SSL *ssl, void *buf, size_t num, size_t *readbytes) */
+SEC("uprobe/SSL_read_ex")
+int BPF_UPROBE(probe_ssl_read_ex_entry, void *ssl, void *buf, __u64 num,
+	       void *readbytes)
+{
+	return stash_read(buf, readbytes);
+}
+
+/*
+ * Return from SSL_read_ex. The return value reports success or failure only;
+ * the byte count was written through the out-parameter captured on entry, and
+ * must be read back out of the traced process.
+ */
+SEC("uretprobe/SSL_read_ex")
+int BPF_URETPROBE(probe_ssl_read_ex_ret, int ret)
+{
+	__u64 id = bpf_get_current_pid_tgid();
+	struct read_args *args;
+	__u64 count = 0;
+
+	args = bpf_map_lookup_elem(&ssl_read_args, &id);
+	if (!args)
+		return 0;
+
+	if (ret == 1 && args->count_ptr != 0) {
+		if (bpf_probe_read_user(&count, sizeof(count),
+					(void *)args->count_ptr) == 0 && count > 0)
+			emit("READ", (void *)args->buf, count);
+	}
+
+	bpf_map_delete_elem(&ssl_read_args, &id);
+	return 0;
+}
