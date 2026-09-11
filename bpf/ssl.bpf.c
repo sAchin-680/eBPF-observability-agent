@@ -22,18 +22,10 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
+#include "capture.h"
+
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
-/*
- * Bytes copied from the caller's buffer per call.
- *
- * A BPF program has 512 bytes of stack in total. This buffer, the comm array,
- * and everything else live within that budget, so the limit is a structural
- * constraint rather than a tuning choice. 256 bytes covers an HTTP/1.1 request
- * line and the first headers, which is all this stage requires; a full request
- * is not reconstructed in kernel space.
- */
-#define MAX_DATA 256
 
 /*
  * State carried from a read entry probe to its return probe.
@@ -76,42 +68,11 @@ struct {
 	__type(value, struct read_args);
 } ssl_read_args SEC(".maps");
 
-/*
- * Copies up to MAX_DATA bytes out of the traced process and emits them.
- *
- * The buffer address belongs to another address space and cannot be
- * dereferenced: the page may not be resident, and the verifier rejects direct
- * access. bpf_probe_read_user performs the copy and reports failure rather than
- * faulting.
- */
-static __always_inline void emit(const char *dir, const void *buf, __u64 len)
+/* Publishes one captured payload. Kept as a named wrapper so the call sites
+ * read the same as before the trace pipe was replaced. */
+static __always_inline void emit(__u8 direction, const void *buf, __u64 len)
 {
-	__u64 id = bpf_get_current_pid_tgid();
-	__u32 tgid = id >> 32;
-	char comm[16];
-	char data[MAX_DATA];
-	__u32 n;
-
-	if (len == 0)
-		return;
-
-	/* Clearing first guarantees a terminator for the %s conversion below,
-	 * whatever the copy length turns out to be. */
-	__builtin_memset(&data, 0, sizeof(data));
-
-	/* The explicit upper bound keeps the copy length provably within the
-	 * destination, which the verifier requires before permitting the call. */
-	if (len > MAX_DATA - 1)
-		n = MAX_DATA - 1;
-	else
-		n = (__u32)len;
-
-	if (bpf_probe_read_user(&data, n, buf) != 0)
-		return;
-
-	bpf_get_current_comm(&comm, sizeof(comm));
-	bpf_printk("%s pid=%d comm=%s", dir, tgid, comm);
-	bpf_printk("%s len=%llu data=%s", dir, len, data);
+	submit_event(direction, SRC_OPENSSL, buf, len);
 }
 
 /* Records read state for the matching return probe. */
@@ -138,7 +99,7 @@ SEC("uprobe/SSL_write")
 int BPF_UPROBE(probe_ssl_write, void *ssl, const void *buf, int num)
 {
 	if (num > 0)
-		emit("WRITE", buf, (__u64)num);
+		emit(DIR_EGRESS, buf, (__u64)num);
 	return 0;
 }
 
@@ -152,7 +113,7 @@ int BPF_UPROBE(probe_ssl_write, void *ssl, const void *buf, int num)
 SEC("uprobe/SSL_write_ex")
 int BPF_UPROBE(probe_ssl_write_ex, void *ssl, const void *buf, __u64 num)
 {
-	emit("WRITE", buf, num);
+	emit(DIR_EGRESS, buf, num);
 	return 0;
 }
 
@@ -182,7 +143,7 @@ int BPF_URETPROBE(probe_ssl_read_ret, int ret)
 		return 0;
 
 	if (ret > 0)
-		emit("READ", (void *)args->buf, (__u64)ret);
+		emit(DIR_INGRESS, (void *)args->buf, (__u64)ret);
 
 	bpf_map_delete_elem(&ssl_read_args, &id);
 	return 0;
@@ -215,7 +176,7 @@ int BPF_URETPROBE(probe_ssl_read_ex_ret, int ret)
 	if (ret == 1 && args->count_ptr != 0) {
 		if (bpf_probe_read_user(&count, sizeof(count),
 					(void *)args->count_ptr) == 0 && count > 0)
-			emit("READ", (void *)args->buf, count);
+			emit(DIR_INGRESS, (void *)args->buf, count);
 	}
 
 	bpf_map_delete_elem(&ssl_read_args, &id);

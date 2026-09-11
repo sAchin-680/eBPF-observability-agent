@@ -372,3 +372,78 @@ host runs several unrelated ones.
 scales with the number of distinct Go executables rather than with the number of
 services worth tracing. Unlike a shared library, each Go binary carries its own
 copy of crypto/tls, so there is no shared file to attach to once.
+
+---
+
+## 2026-09-12 — Ring buffer data path
+
+### Kernel and userspace struct layouts must be asserted, not assumed
+
+**Context:** Replacing the trace pipe with `BPF_MAP_TYPE_RINGBUF`, which moves
+raw bytes rather than formatted text.
+
+**Cause for concern:** The record is written by a C struct and read by a Go
+struct. A field added or reordered on one side alone produces records that
+decode without error and carry wrong values in every field after the change.
+There is no error to catch, only wrong numbers.
+
+**Resolution:** Both sides measured and pinned at 304 bytes, with a unit test
+asserting it:
+
+```
+C  sizeof(struct event) = 304
+Go binary.Size(rawEvent) = 304
+```
+
+The Go struct carries an explicit trailing pad, because `encoding/binary` packs
+without alignment while the C compiler rounds the struct up to its own
+alignment. Omitting it leaves the Go side two bytes short and every record
+fails to decode.
+
+### Building records in ring buffer memory removes the stack limit
+
+**Context:** Payload capture size was fixed at 256 bytes by the 512-byte BPF
+stack.
+
+**Cause:** `bpf_ringbuf_reserve` returns a pointer into the ring buffer, so the
+record is never on the stack.
+
+**Worth carrying forward:** the binding constraint is now throughput rather than
+stack size. Every byte reserved is capacity unavailable to the next event, so
+raising the capture size directly raises the drop rate at a given request rate.
+That trade is the subject of the overhead benchmark.
+
+### The ring buffer did not drop under the load available here
+
+**Context:** Verifying that drop accounting works, rather than assuming it.
+
+**Symptom:** 400 concurrent clients produced 1200 events and zero drops at
+256 KiB. The path was implemented but unexercised, which is not the same as
+verified.
+
+**Resolution:** Rebuilt with the buffer at its 4 KiB minimum, roughly thirteen
+records, and repeated the load:
+
+```
+WARNING: openssl dropped 2 events (2 total): ring buffer full
+682 events delivered
+```
+
+**Worth carrying forward:** the load reachable from one host against a remote
+endpoint is network-bound, not agent-bound, so it cannot establish the rate at
+which drops begin. That figure needs a local target and a proper load harness.
+
+### Most ingress events are five bytes of TLS record header
+
+**Context:** Reviewing captured output.
+
+**Symptom:** Roughly half of all ingress events carry `len=5` and no printable
+payload.
+
+**Cause:** Both OpenSSL and Go read the five-byte TLS record header in a
+separate call before reading the record body.
+
+**Worth carrying forward:** these are not HTTP and the parser must ignore them.
+They also consume ring buffer capacity and inflate the event rate by about a
+factor of two, so filtering them in kernel space would directly reduce drop
+pressure.
