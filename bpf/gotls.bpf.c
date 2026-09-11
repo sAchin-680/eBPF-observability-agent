@@ -28,9 +28,9 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
-char LICENSE[] SEC("license") = "Dual BSD/GPL";
+#include "capture.h"
 
-#define MAX_DATA 256
+char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 /*
  * The register holding the current goroutine under Go's register ABI, in place
@@ -56,30 +56,9 @@ struct {
 	__type(value, struct go_read_args);
 } go_read_args SEC(".maps");
 
-static __always_inline void emit_go(const char *dir, const void *buf, __u64 len)
+static __always_inline void emit_go(__u8 direction, const void *buf, __u64 len)
 {
-	__u64 id = bpf_get_current_pid_tgid();
-	__u32 tgid = id >> 32;
-	char comm[16];
-	char data[MAX_DATA];
-	__u32 n;
-
-	if (len == 0)
-		return;
-
-	__builtin_memset(&data, 0, sizeof(data));
-
-	if (len > MAX_DATA - 1)
-		n = MAX_DATA - 1;
-	else
-		n = (__u32)len;
-
-	if (bpf_probe_read_user(&data, n, buf) != 0)
-		return;
-
-	bpf_get_current_comm(&comm, sizeof(comm));
-	bpf_printk("%s pid=%d comm=%s", dir, tgid, comm);
-	bpf_printk("%s len=%llu data=%s", dir, len, data);
+	submit_event(direction, SRC_GOTLS, buf, len);
 }
 
 /*
@@ -100,7 +79,7 @@ static __always_inline void emit_go(const char *dir, const void *buf, __u64 len)
 SEC("uprobe/go_tls_write")
 int BPF_UPROBE(probe_go_tls_write, void *conn, const void *buf, __u64 len)
 {
-	emit_go("WRITE", buf, len);
+	emit_go(DIR_EGRESS, buf, len);
 	return 0;
 }
 
@@ -145,7 +124,7 @@ int BPF_UPROBE(probe_go_tls_read_return)
 		return 0;
 
 	if (n > 0)
-		emit_go("READ", (void *)args->buf, (__u64)n);
+		emit_go(DIR_INGRESS, (void *)args->buf, (__u64)n);
 
 	bpf_map_delete_elem(&go_read_args, &g);
 	return 0;
