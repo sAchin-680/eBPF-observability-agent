@@ -3,54 +3,53 @@ package ebpf
 import (
 	"errors"
 	"fmt"
-	"os"
+	"log"
 
 	bpf "github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
+
+	"github.com/sAchin-680/ebpf-observability-agent/internal/proc"
 )
 
-// libsslSearchPaths lists where OpenSSL 3 is installed by the common
-// distributions. Debian and Ubuntu use multiarch directories, RHEL and its
-// derivatives use lib64.
-//
-// This is a starting point, not the final approach: a process can load a
-// private copy of libssl from anywhere, so per-process resolution has to read
-// the loaded object list from /proc rather than searching the host.
-var libsslSearchPaths = []string{
-	"/usr/lib/aarch64-linux-gnu/libssl.so.3",
-	"/usr/lib/x86_64-linux-gnu/libssl.so.3",
-	"/usr/lib64/libssl.so.3",
-	"/lib/aarch64-linux-gnu/libssl.so.3",
-	"/lib/x86_64-linux-gnu/libssl.so.3",
+// probe describes one attachment: a symbol in the target library, the program
+// to run, and whether it fires on entry or on return.
+type probe struct {
+	symbol string
+	prog   func(*sslObjects) *bpf.Program
+	onExit bool
 }
 
-// FindLibSSL returns the path to the host's OpenSSL 3 shared library. The
-// LIBSSL_PATH environment variable overrides the search.
-func FindLibSSL() (string, error) {
-	if p := os.Getenv("LIBSSL_PATH"); p != "" {
-		return p, nil
-	}
-	for _, p := range libsslSearchPaths {
-		if _, err := os.Stat(p); err == nil {
-			return p, nil
-		}
-	}
-	return "", errors.New("libssl.so.3 not found; set LIBSSL_PATH to override")
+// probes covers both OpenSSL APIs. Callers are split between them with nothing
+// to distinguish them from outside: curl calls SSL_write and SSL_read, CPython
+// calls SSL_write_ex and SSL_read_ex exclusively. Probing one pair misses the
+// other's callers silently, because the unprobed symbols are still present and
+// nothing reports an error.
+//
+// The write paths carry their payload on entry, so one probe covers each. The
+// read paths fill the caller's buffer before returning and need an entry probe
+// to record the destination and a return probe to read it.
+var probes = []probe{
+	{"SSL_write", func(o *sslObjects) *bpf.Program { return o.ProbeSslWrite }, false},
+	{"SSL_write_ex", func(o *sslObjects) *bpf.Program { return o.ProbeSslWriteEx }, false},
+	{"SSL_read", func(o *sslObjects) *bpf.Program { return o.ProbeSslReadEntry }, false},
+	{"SSL_read", func(o *sslObjects) *bpf.Program { return o.ProbeSslReadRet }, true},
+	{"SSL_read_ex", func(o *sslObjects) *bpf.Program { return o.ProbeSslReadExEntry }, false},
+	{"SSL_read_ex", func(o *sslObjects) *bpf.Program { return o.ProbeSslReadExRet }, true},
 }
 
 // Tracer holds the loaded kernel programs and the probes attached to them.
 type Tracer struct {
-	objs  sslObjects
-	links []link.Link
+	objs     sslObjects
+	links    []link.Link
+	attached map[string]bool
 }
 
-// NewTracer loads the kernel-side programs. The verifier runs during this
-// call: on rejection nothing has executed, and the program never entered the
-// kernel.
+// NewTracer loads the kernel-side programs. The verifier runs during this call:
+// on rejection nothing has executed, and the program never entered the kernel.
 func NewTracer() (*Tracer, error) {
 	// BPF maps and programs are charged against locked memory. Kernels before
-	// 5.11 apply a default limit far below what a typical program needs, and
+	// 5.11 apply a default limit far below what a typical program needs and
 	// report the shortfall as a permission error. Later kernels account for
 	// this through cgroups and ignore the limit.
 	if err := rlimit.RemoveMemlock(); err != nil {
@@ -59,8 +58,8 @@ func NewTracer() (*Tracer, error) {
 
 	var objs sslObjects
 	if err := loadSslObjects(&objs, nil); err != nil {
-		// A verifier rejection carries an instruction-level log of the
-		// register state that caused it. Anything less is not diagnosable.
+		// A verifier rejection carries an instruction-level log of the register
+		// state that caused it. Anything less is not diagnosable.
 		var ve *bpf.VerifierError
 		if errors.As(err, &ve) {
 			return nil, fmt.Errorf("verifier rejected program:\n%+v", ve)
@@ -68,62 +67,88 @@ func NewTracer() (*Tracer, error) {
 		return nil, fmt.Errorf("loading programs: %w", err)
 	}
 
-	return &Tracer{objs: objs}, nil
+	return &Tracer{objs: objs, attached: make(map[string]bool)}, nil
 }
 
-// AttachOpenSSL attaches the capture probes to the OpenSSL library at path.
+// AttachLibrary attaches the capture probes to one TLS library. It reports
+// whether an attachment was made; a library already attached is skipped.
 //
-// The probes are attached to the library file, so they fire for every process
-// that has it mapped, including processes started after attachment. That is
-// what makes the agent independent of the traced application's lifecycle.
-func (t *Tracer) AttachOpenSSL(path string) error {
-	ex, err := link.OpenExecutable(path)
+// A uprobe is placed in a file rather than in a process, so one attachment
+// covers every process mapping that file, including processes started later.
+// Attaching once per process instead would multiply every captured event by the
+// number of processes sharing the library.
+//
+// A symbol that is absent is skipped rather than treated as fatal. Builds
+// differ in which entry points they export, and refusing to trace a library
+// over one missing symbol would discard the ones it does export. An attachment
+// that yields no probes at all is an error, since that library cannot be
+// traced.
+func (t *Tracer) AttachLibrary(lib proc.Library) (bool, error) {
+	if t.attached[lib.Key] {
+		return false, nil
+	}
+	t.attached[lib.Key] = true
+
+	ex, err := link.OpenExecutable(lib.HostPath)
 	if err != nil {
-		return fmt.Errorf("opening %s: %w", path, err)
+		return false, fmt.Errorf("opening %s: %w", lib.HostPath, err)
 	}
 
-	// Both OpenSSL APIs are probed. Callers are split between them with no
-	// way to tell from the outside: curl calls SSL_write and SSL_read,
-	// CPython calls SSL_write_ex and SSL_read_ex exclusively. Probing one
-	// pair misses the other's callers silently, since the unprobed symbols
-	// are still present in the library and nothing reports an error.
-	//
-	// The write paths carry their payload on entry, so a single probe covers
-	// each. The read paths fill the caller's buffer before returning and need
-	// an entry probe to record the destination and a return probe to read it.
-	for _, p := range []struct {
-		symbol string
-		prog   *bpf.Program
-		ret    bool
-	}{
-		{"SSL_write", t.objs.ProbeSslWrite, false},
-		{"SSL_write_ex", t.objs.ProbeSslWriteEx, false},
-		{"SSL_read", t.objs.ProbeSslReadEntry, false},
-		{"SSL_read", t.objs.ProbeSslReadRet, true},
-		{"SSL_read_ex", t.objs.ProbeSslReadExEntry, false},
-		{"SSL_read_ex", t.objs.ProbeSslReadExRet, true},
-	} {
+	var n int
+	for _, p := range probes {
 		var l link.Link
 		var err error
-		if p.ret {
-			l, err = ex.Uretprobe(p.symbol, p.prog, nil)
+		if p.onExit {
+			l, err = ex.Uretprobe(p.symbol, p.prog(&t.objs), nil)
 		} else {
-			l, err = ex.Uprobe(p.symbol, p.prog, nil)
+			l, err = ex.Uprobe(p.symbol, p.prog(&t.objs), nil)
 		}
 		if err != nil {
-			return fmt.Errorf("attaching to %s: %w", p.symbol, err)
+			log.Printf("skipping %s in %s: %v", p.symbol, lib.Path, err)
+			continue
 		}
 		t.links = append(t.links, l)
+		n++
 	}
 
-	return nil
+	if n == 0 {
+		return false, fmt.Errorf("no probes attached to %s", lib.Path)
+	}
+	return true, nil
+}
+
+// AttachAll discovers every TLS library currently mapped on the host and
+// attaches to each distinct one. It returns the number of libraries attached.
+func (t *Tracer) AttachAll() (int, error) {
+	libs, err := proc.FindTLSLibraries()
+	if err != nil {
+		return 0, fmt.Errorf("discovering TLS libraries: %w", err)
+	}
+
+	var n int
+	for _, lib := range libs {
+		ok, err := t.AttachLibrary(lib)
+		if err != nil {
+			log.Printf("attach failed for %s: %v", lib.Path, err)
+			continue
+		}
+		if ok {
+			log.Printf("attached %s (pid %d, %s)", lib.Path, lib.PID, lib.Key)
+			n++
+		}
+	}
+	return n, nil
 }
 
 // Close detaches every probe and releases the loaded programs.
 //
-// Probe lifetime is bound to these file descriptors. If the agent exits
-// without calling Close, including on a crash, the kernel releases them and
-// detaches the probes, leaving the traced process running as before.
+// Probe lifetime is bound to these file descriptors. If the agent exits without
+// calling Close, including on a crash, the kernel releases them and detaches the
+// probes, leaving traced processes running as before.
+//
+// Probes are not detached when a traced process exits. The probe belongs to the
+// library file, and other processes may still be using it; detaching on process
+// exit would stop tracing everything else sharing that library.
 func (t *Tracer) Close() error {
 	var firstErr error
 	for _, l := range t.links {
