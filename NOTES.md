@@ -719,3 +719,93 @@ directory-qualified pattern matches it.
 **Worth carrying forward:** the test reported success while measuring the wrong
 thing. Verifying the precondition — that nothing was running — is what caught it,
 and the second run asserts that precondition explicitly before proceeding.
+
+---
+
+## 2026-09-12 — Socket endpoints
+
+### Joining a TLS connection to its socket
+
+**Context:** A probe on a TLS library sees the connection object and the
+plaintext but nothing about the network. The four-tuple lives in `struct sock`,
+which only appears in the kernel's TCP path, where the plaintext no longer
+exists. Neither hook alone can produce a record carrying both.
+
+**Resolution:** The thread joins them. A TLS write encrypts and then calls
+write(), reaching `tcp_sendmsg` on the same thread. The TLS probe records which
+connection the thread is inside; the TCP probe reads that and binds the socket
+it was handed to that connection.
+
+The programs are compiled separately, so each would normally get its own copy of
+those maps. Passing one program's map instances as replacements at load time
+makes all of them operate on the same kernel maps, which keeps the Go programs
+loadable only on hosts that run Go binaries.
+
+**A kprobe, deliberately, against the general preference for tracepoints.** No
+tracepoint provides what is needed: the socket tracepoints fire on state
+transitions, which report a connection being established rather than a
+particular send, and establishment happens on a different thread in the accept
+path and in softirq context with no useful process identity. The cost is that
+`tcp_sendmsg` has no stability guarantee, so attachment is attempted and a
+failure is reported and tolerated — records are still produced, without
+endpoints.
+
+### Every address was reported with its octets reversed
+
+**Symptom:** `peer=1.0.0.127:8444`.
+
+**Cause:** The kernel stores the address as four bytes in network order. Decoding
+the record with little-endian integers reverses them, and writing the value back
+out big-endian reverses them a second time.
+
+**Worth carrying forward:** the result is a syntactically valid address, so
+nothing downstream would have rejected it. The fix was to stop converting
+entirely and carry the address as raw bytes end to end, which removes the
+opportunity for the error rather than correcting it.
+
+### Half the connections were invisible because they were IPv6
+
+**Symptom:** Resolution succeeded for some services and never for others:
+
+```
+openssl: 15/36 resolved     gotls: 0/7 resolved
+
+curl -> :8444 (Flask)   resolved
+curl -> :8443 (Go)      not resolved
+curl -> :8445 (Node)    not resolved
+curl -> example.com     resolved
+```
+
+The same curl binary behaved differently per destination, which ruled out the
+client, the language, and the server/client distinction.
+
+**Cause:** The Go and Node services bind the default dual-stack address, so a
+connection to `localhost` arrives over IPv6. Flask binds `0.0.0.0`, so the same
+client falls back to IPv4. The program returned early on any family other than
+`AF_INET`, discarding every IPv6 connection silently.
+
+**Resolution:** Handle both families, storing addresses as sixteen raw bytes and
+unmapping IPv4-mapped IPv6 addresses in userspace.
+
+```
+openssl: 36/36 resolved     gotls: 7/7 resolved
+peer=[::1]:50244    peer=104.20.23.154:443
+```
+
+**Worth carrying forward:** IPv6 is not an edge case to defer. A Go or Node
+service on its default address is reached over IPv6 for every local connection,
+so an IPv4-only implementation misses the common case while appearing to work
+against whichever service happens to bind IPv4.
+
+### The active connection marker is never cleared
+
+**Known limitation, not yet addressed.** The marker recording which connection a
+thread is inside persists after the TLS call returns. An unrelated TCP send on
+that thread before the next TLS call would be attributed to the stale
+connection.
+
+Clearing it would need a probe on the TLS call's return, which is exactly what
+cannot be done safely on Go. The exposure is bounded — a thread handling a
+keep-alive connection sends only for that connection, and the next TLS call
+overwrites the marker — but it is wrong data rather than missing data, which
+makes it worth recording.
