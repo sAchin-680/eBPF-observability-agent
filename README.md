@@ -48,9 +48,9 @@ happens at the shared library and kernel boundary, so any process on the node
 becomes observable the moment it starts — including processes started after
 the agent is already running.
 
-A detailed data-path diagram — kernel hook, ring buffer, userspace parser,
-correlated request record — is a Phase 1 deliverable, tracked in
-[`docs/ROADMAP.md`](docs/ROADMAP.md).
+[`docs/data-path.md`](docs/data-path.md) traces a request end to end: how
+probes are attached, why the read and write paths differ, how a TLS connection
+is bound to its socket, and where coverage can silently degrade.
 
 ---
 
@@ -84,10 +84,13 @@ by a passing test or a recorded benchmark.
 | :--- | :--- |
 | Reproducible Linux development environment, BTF-verified | Complete |
 | BPF build pipeline (`vmlinux.h` generation, `bpf2go` codegen) | Complete |
-| Uprobe capture of OpenSSL `SSL_write` / `SSL_read` | In progress |
-| Go `crypto/tls` capture path | Not started |
-| Socket-level connection correlation | Not started |
-| HTTP/1.1 request and response reconstruction | Not started |
+| Uprobe capture of OpenSSL, all four read and write entry points | Complete |
+| Go `crypto/tls` capture, via return-site probes | Complete |
+| Ring buffer data path with drop accounting | Complete |
+| HTTP/1.1 start-line parsing | Complete |
+| Request and response correlation into single records | Complete |
+| Socket endpoint capture, IPv4 and IPv6 | Complete |
+| Process discovery via `sched_process_exec` | Complete |
 | OpenTelemetry export to Tempo and Prometheus | Not started |
 | Kubernetes DaemonSet deployment | Not started |
 | Measured overhead and ring buffer drop-rate benchmarks | Not started |
@@ -102,8 +105,8 @@ The phase plan is in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 - HTTP/1.1 request and response tracing — method, path, status, timing — over
   both plaintext and TLS
-- OpenSSL interception via uprobes, covering any runtime that links libssl,
-  including Python, Ruby, PHP, and C/C++
+- OpenSSL interception via uprobes, covering any runtime that dynamically links
+  libssl, including Python, Ruby, PHP, C/C++, and distribution-packaged Node
 - Go `crypto/tls` as a second, independent capture path, since Go does not
   link OpenSSL
 - Connection correlation via kprobes and tracepoints
@@ -117,8 +120,11 @@ The phase plan is in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 - **HTTP/2 and gRPC.** Binary framing over TLS is a materially harder
   in-kernel parsing problem than HTTP/1.1 and is not attempted here.
-- **Node.js TLS internals.** Node bundles its own BoringSSL variant; this is a
-  known gap rather than a solved case.
+- **Statically linked TLS.** A runtime that links OpenSSL into its own binary
+  presents no shared library to attach to. Distribution-packaged Node links
+  system OpenSSL and is traced; the official Node build links it statically and
+  is not. The symbols remain exported in both cases, so this needs per-binary
+  attachment rather than a new mechanism.
 - **Database wire protocols** such as MySQL and PostgreSQL.
 - **Cross-service trace context propagation.** The agent generates a trace ID
   per request, because an uninstrumented caller supplies no incoming context
