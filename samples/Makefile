@@ -38,8 +38,11 @@ deps: ## Install Python and Node dependencies
 build: ## Build the Go service
 	@cd go-api && $(GO) mod tidy >/dev/null 2>&1 && $(GO) build -o go-api .
 
+.PHONY: prepare
+prepare: certs deps build ## Install dependencies, build, and generate certificates
+
 .PHONY: run
-run: certs build ## Start all three services in the background
+run: certs ## Start all three services in the background (run `prepare` first)
 	@mkdir -p $(LOG_DIR)
 	@cd go-api       && setsid ./go-api                > ../$(LOG_DIR)/go-api.log       2>&1 < /dev/null &
 	@cd python-flask && setsid .venv/bin/python app.py > ../$(LOG_DIR)/python-flask.log 2>&1 < /dev/null &

@@ -20,11 +20,37 @@ cd "$REPO"
 # that the sample services are built with.
 export PATH="$PATH:/usr/local/go/bin"
 
+# Only the agent needs privilege. The services run as the invoking user, which
+# is both how they would run in reality and a requirement here: the working tree
+# is a shared mount where the guest's root maps to an unprivileged host user and
+# cannot write.
+AS_USER=(env)
+if [ -n "${SUDO_USER:-}" ]; then
+  AS_USER=(sudo -u "$SUDO_USER" env "PATH=$PATH")
+fi
+samples() { "${AS_USER[@]}" make -C "$REPO/samples" "$@"; }
+
 bold()  { printf "\n\033[1m%s\033[0m\n" "$1"; }
 dim()   { printf "\033[2m%s\033[0m\n" "$1"; }
 pause() { sleep "${1:-3}"; }
 
-trap 'make -C samples stop >/dev/null 2>&1; pkill -f bin/agent >/dev/null 2>&1' EXIT
+trap 'samples stop >/dev/null 2>&1; pkill -f bin/agent >/dev/null 2>&1' EXIT
+
+# Building is a prerequisite rather than part of the demonstration. Compiling
+# mid-run produces a minute of unrelated output, and under sudo it rebuilds
+# from an empty cache belonging to a different user.
+missing=""
+[ -x bin/agent ] || missing="$missing bin/agent (make build)"
+[ -x samples/go-api/go-api ] || missing="$missing samples/go-api/go-api"
+[ -x samples/python-flask/.venv/bin/python ] || missing="$missing the Flask venv"
+[ -d samples/node-express/node_modules ] || missing="$missing node_modules"
+[ -f samples/certs/cert.pem ] || missing="$missing samples/certs"
+if [ -n "$missing" ]; then
+  printf "Missing:%s\n\n" "$missing"
+  printf "Prepare first, as your normal user:\n\n"
+  printf "    make build\n    make -C samples prepare\n\n"
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 bold "1. Three services, three languages, three TLS implementations"
@@ -71,7 +97,7 @@ pause 5
 bold "3. Start the agent — before the services exist"
 dim "   Nothing is running to trace yet. The agent attaches to processes as"
 dim "   they start, so it does not need to be restarted when they do."
-make -C samples stop >/dev/null 2>&1
+samples stop >/dev/null 2>&1
 pkill -f bin/agent >/dev/null 2>&1
 sleep 1
 
@@ -83,7 +109,7 @@ pause 3
 
 # ---------------------------------------------------------------------------
 bold "4. Start the services"
-make -C samples run 2>&1 | grep -vE "^make(\[|:)" | sed 's/^/   /'
+samples run 2>&1 | grep -vE "^make(\[|:)" | sed 's/^/   /'
 sleep 3
 echo
 dim "   Attachments made after the agent was already running:"
@@ -94,7 +120,7 @@ pause 4
 bold "5. Send traffic"
 dim "   Six routes per service, including a deliberate 404, a 500, and an"
 dim "   endpoint that sleeps for 150ms."
-make -C samples traffic 2>&1 | grep -vE "^make(\[|:)" | sed 's/^/   /'
+samples traffic 2>&1 | grep -vE "^make(\[|:)" | sed 's/^/   /'
 sleep 3
 
 # ---------------------------------------------------------------------------
