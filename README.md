@@ -222,9 +222,9 @@ the schedule is in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 | ADR | Decision |
 | :--- | :--- |
 | 001 | DaemonSet rather than sidecar |
-| 002 | uprobes on TLS read/write rather than traffic mirroring |
-| 003 | Tracepoints over kprobes where both exist |
-| 004 | CO-RE rather than BCC |
+| [002](docs/adr/002-uprobes-on-tls-entry-points.md) | Capture plaintext at TLS library entry points |
+| [003](docs/adr/003-tracepoints-over-kprobes.md) | Prefer tracepoints, record where a kprobe is unavoidable |
+| [004](docs/adr/004-core-over-bcc.md) | Compile once with CO-RE rather than per host with BCC |
 | 005 | Per-request generated trace IDs, no context propagation |
 | 006 | `CAP_BPF` + `CAP_PERFMON` rather than `--privileged` |
 | 007 | Canary rollout rather than fleet-wide apply |
