@@ -47,6 +47,7 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 /* Destination buffer recorded at read entry, awaiting the return site. */
 struct go_read_args {
 	__u64 buf;
+	__u64 conn; /* the *tls.Conn this read belongs to */
 };
 
 struct {
@@ -56,9 +57,10 @@ struct {
 	__type(value, struct go_read_args);
 } go_read_args SEC(".maps");
 
-static __always_inline void emit_go(__u8 direction, const void *buf, __u64 len)
+static __always_inline void emit_go(__u8 direction, __u64 conn, const void *buf,
+				    __u64 len)
 {
-	submit_event(direction, SRC_GOTLS, buf, len);
+	submit_event(direction, SRC_GOTLS, conn, buf, len);
 }
 
 /*
@@ -79,7 +81,7 @@ static __always_inline void emit_go(__u8 direction, const void *buf, __u64 len)
 SEC("uprobe/go_tls_write")
 int BPF_UPROBE(probe_go_tls_write, void *conn, const void *buf, __u64 len)
 {
-	emit_go(DIR_EGRESS, buf, len);
+	emit_go(DIR_EGRESS, (__u64)conn, buf, len);
 	return 0;
 }
 
@@ -93,7 +95,7 @@ SEC("uprobe/go_tls_read")
 int BPF_UPROBE(probe_go_tls_read_entry, void *conn, void *buf, __u64 cap)
 {
 	__u64 g = GOROUTINE_PTR(ctx);
-	struct go_read_args args = {.buf = (__u64)buf};
+	struct go_read_args args = {.buf = (__u64)buf, .conn = (__u64)conn};
 
 	bpf_map_update_elem(&go_read_args, &g, &args, BPF_ANY);
 	return 0;
@@ -124,7 +126,7 @@ int BPF_UPROBE(probe_go_tls_read_return)
 		return 0;
 
 	if (n > 0)
-		emit_go(DIR_INGRESS, (void *)args->buf, (__u64)n);
+		emit_go(DIR_INGRESS, args->conn, (void *)args->buf, (__u64)n);
 
 	bpf_map_delete_elem(&go_read_args, &g);
 	return 0;

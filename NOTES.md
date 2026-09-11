@@ -514,3 +514,71 @@ reported during this run, so loss is not the explanation.
 **Worth carrying forward:** correlation cannot assume a response exists for
 every request. A request left unmatched needs an expiry path, or unmatched
 requests will accumulate for the lifetime of the agent.
+
+---
+
+## 2026-09-12 — Request correlation
+
+### The TLS connection object is the correlation key
+
+**Context:** Pairing a request payload with its response. The socket four-tuple
+is not available at a TLS library hook, and the obvious process- or thread-based
+keys are both wrong.
+
+**Why the alternatives fail:**
+
+- *Thread*: correct for OpenSSL, wrong for Go, where a goroutine blocked on a
+  read resumes on a different thread. Also wrong for any thread pool serving
+  many connections.
+- *Process*: a server handles many connections concurrently; a single pending
+  slot per process would interleave unrelated exchanges.
+
+**Resolution:** The receiver argument already identifies the connection —
+OpenSSL's `SSL*` and Go's `*tls.Conn` — and was being discarded. It is unique
+for the connection's lifetime, which is exactly the window correlation needs.
+
+**Worth carrying forward:** the pointer is an address in the traced process and
+is never dereferenced, only compared. Addresses are reused after a connection
+closes and two processes can hold the same address simultaneously, so the key is
+scoped by pid and bounded by a TTL rather than trusted as globally unique.
+
+### The earlier request/response mismatch was not loss
+
+**Context:** Parsing alone produced 16 requests and 11 responses, with no ring
+buffer drops to explain the gap.
+
+**Resolution:** With correlation and counters in place:
+
+```
+requests=14 completed=13 expired=1 unmatched-responses=0 non-http=13 pending=0
+```
+
+The apparent gap was two separate things. Most of it was payloads that are not
+HTTP at all — thirteen in this run, largely TLS record headers — which the
+parser discards and which were never responses to begin with. The remainder was
+one genuinely unanswered request, now reported as expired rather than vanishing.
+
+**Worth carrying forward:** counting what is discarded is what turned an
+unexplained discrepancy into two understood numbers. Without the non-HTTP and
+unmatched counters the gap would still look like loss.
+
+### An expired record must not carry a status
+
+**Context:** Deciding what to report when no response arrives.
+
+**Reasoning:** The absence of a captured response does not mean the request
+failed. It may have been answered on a connection the agent attached to
+mid-exchange, or split across reads leaving no start line in any captured
+prefix. Reporting a synthetic error status would fabricate failures that did not
+occur, which is worse than reporting an incomplete record.
+
+**Resolution:** Expired records carry status zero and an explicit outcome, and
+the printer renders the duration as unknown rather than as zero.
+
+### Measured durations match the network round trip
+
+**Context:** Sanity-checking that timestamps mean anything.
+
+**Result:** Every completed record against the same remote endpoint fell between
+27ms and 34ms, consistent with the round-trip time to that host. A correlation
+bug pairing unrelated events would produce durations unrelated to each other.

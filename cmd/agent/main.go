@@ -12,9 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sAchin-680/ebpf-observability-agent/internal/capture"
+	"github.com/sAchin-680/ebpf-observability-agent/internal/correlate"
 	"github.com/sAchin-680/ebpf-observability-agent/internal/ebpf"
-	"github.com/sAchin-680/ebpf-observability-agent/internal/httpparse"
 )
 
 // rescanInterval controls how often the agent looks for TLS libraries and Go
@@ -26,6 +25,9 @@ import (
 // rather than sampling: a tracepoint on process execution, which replaces this
 // loop.
 const rescanInterval = 500 * time.Millisecond
+
+// expireInterval controls how often unanswered requests are swept.
+const expireInterval = 5 * time.Second
 
 func main() {
 	log.SetFlags(log.Ltime)
@@ -61,11 +63,32 @@ func main() {
 		}
 	}()
 
+	// One correlator, driven from the reader, so no locking is needed.
+	corr := correlate.New(correlate.DefaultTTL, printRecord)
+
+	// Expiry runs on a timer because an unanswered request is only detectable
+	// by the absence of a response, which produces no event to react to.
+	go func() {
+		ticker := time.NewTicker(expireInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				corr.Expire()
+			}
+		}
+	}()
+
 	log.Printf("reading events")
-	if err := tracer.Run(ctx, printEvent); err != nil {
+	if err := tracer.Run(ctx, corr.Handle); err != nil {
 		log.Printf("reading events: %v", err)
 	}
 
+	st := corr.Stats()
+	log.Printf("requests=%d completed=%d expired=%d unmatched-responses=%d non-http=%d pending=%d",
+		st.Requests, st.Completed, st.Expired, st.ResponsesUnmatched, st.NotHTTP, corr.Pending())
 	for name, n := range tracer.Drops() {
 		if n > 0 {
 			log.Printf("%s: %d events dropped over the run", name, n)
@@ -92,38 +115,34 @@ func attach(t *ebpf.Tracer, announce bool) {
 	}
 }
 
-// printEvent renders one captured payload.
+// printRecord renders one correlated request record.
 //
-// Payloads that are not HTTP are discarded here rather than reported. Roughly
-// half of all captured events are five-byte TLS record headers, and response
-// bodies arrive through the same path as start lines; passing those on as
-// telemetry would report traffic that does not exist.
-//
-// This is the placeholder consumer until correlation pairs requests with their
-// responses into single records.
-func printEvent(e capture.Event) {
-	m, ok := httpparse.Parse(e.Data)
-	if !ok {
-		return
+// This is the terminal consumer until the OpenTelemetry exporter replaces it.
+func printRecord(r correlate.Record) {
+	status := "-"
+	if r.Outcome == correlate.Expired {
+		status = "expired"
+	} else if r.Status > 0 {
+		status = strconv.Itoa(r.Status)
 	}
 
-	note := ""
-	if e.Truncated() {
-		note = " trunc/" + strconv.FormatUint(e.Len, 10)
+	host := r.Host
+	if host == "" {
+		host = "-"
 	}
 
-	switch m.Kind {
-	case httpparse.Request:
-		host := m.Host
-		if host == "" {
-			host = "-"
-		}
-		fmt.Printf("%-7s req  pid=%-7d comm=%-15s %-7s %-24s host=%s%s\n",
-			e.Source, e.PID, e.Comm, m.Method, truncate(m.Path, 24), host, note)
-	case httpparse.Response:
-		fmt.Printf("%-7s resp pid=%-7d comm=%-15s %d %s%s\n",
-			e.Source, e.PID, e.Comm, m.Status, m.Reason, note)
+	fmt.Printf("%-7s pid=%-7d comm=%-15s %-7s %-26s %-7s %8s  host=%s\n",
+		r.Source, r.PID, r.Comm, r.Method, truncate(r.Path, 26), status,
+		formatDuration(r.Duration), host)
+}
+
+// formatDuration renders the request duration. An expired record has no
+// duration, and printing zero would read as an instantaneous request.
+func formatDuration(d time.Duration) string {
+	if d == 0 {
+		return "-"
 	}
+	return d.Round(time.Microsecond).String()
 }
 
 // truncate shortens a field to keep the output aligned.
