@@ -57,6 +57,7 @@ type rawEvent struct {
 	TimestampNS uint64
 	PID         uint32
 	TID         uint32
+	Conn        uint64
 	Len         uint64
 	Captured    uint32
 	Direction   uint8
@@ -74,6 +75,16 @@ type Event struct {
 
 	PID       uint32
 	TID       uint32
+
+	// Conn identifies the TLS connection this payload belongs to: OpenSSL's
+	// SSL* or Go's *tls.Conn. It is an address inside the traced process,
+	// used only as an opaque identity and never dereferenced.
+	//
+	// It pairs a request with its response. Addresses are reused once a
+	// connection closes, so it is only unique within one process and only for
+	// as long as that connection lives.
+	Conn uint64
+
 	Comm      string
 	Direction Direction
 	Source    Source
@@ -109,6 +120,7 @@ func Decode(raw []byte) (Event, error) {
 		Timestamp: time.Duration(r.TimestampNS),
 		PID:       r.PID,
 		TID:       r.TID,
+		Conn:      r.Conn,
 		Comm:      string(bytes.TrimRight(r.Comm[:], "\x00")),
 		Direction: Direction(r.Direction),
 		Source:    Source(r.Source),

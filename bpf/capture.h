@@ -42,6 +42,22 @@ struct event {
 	__u32 pid; /* thread group id, what userspace calls the process */
 	__u32 tid; /* thread id */
 
+	/* The TLS connection object this payload belongs to: OpenSSL's SSL* or
+	 * Go's *tls.Conn, taken from the receiver argument.
+	 *
+	 * This is what pairs a request with its response. The thread cannot serve
+	 * that purpose — Go migrates goroutines between threads mid-call, and a
+	 * thread pool serves many connections — and the socket four-tuple is not
+	 * available at this hook. The pointer is unique for the lifetime of the
+	 * connection, which is exactly the window correlation needs.
+	 *
+	 * It is an address within the traced process and is never dereferenced;
+	 * it is used only as an opaque identity. Addresses are reused after a
+	 * connection closes, so it is scoped by pid and by time, not trusted as
+	 * globally unique.
+	 */
+	__u64 conn;
+
 	/* Length the call reported, which may exceed what was captured. Keeping
 	 * both makes truncation visible rather than silent. */
 	__u64 len;
@@ -102,7 +118,7 @@ static __always_inline void count_drop(void)
  * access. bpf_probe_read_user performs the copy and reports failure rather than
  * faulting.
  */
-static __always_inline void submit_event(__u8 direction, __u8 source,
+static __always_inline void submit_event(__u8 direction, __u8 source, __u64 conn,
 					 const void *buf, __u64 len)
 {
 	struct event *e;
@@ -143,6 +159,7 @@ static __always_inline void submit_event(__u8 direction, __u8 source,
 	__u64 id = bpf_get_current_pid_tgid();
 	e->pid = id >> 32;
 	e->tid = (__u32)id;
+	e->conn = conn;
 	e->len = len;
 	e->captured = n;
 	e->direction = direction;

@@ -48,6 +48,7 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 struct read_args {
 	__u64 buf;       /* destination buffer in the traced process */
 	__u64 count_ptr; /* where SSL_read_ex will write the byte count */
+	__u64 conn;      /* the SSL* this read belongs to */
 };
 
 /*
@@ -70,18 +71,20 @@ struct {
 
 /* Publishes one captured payload. Kept as a named wrapper so the call sites
  * read the same as before the trace pipe was replaced. */
-static __always_inline void emit(__u8 direction, const void *buf, __u64 len)
+static __always_inline void emit(__u8 direction, __u64 conn, const void *buf,
+				 __u64 len)
 {
-	submit_event(direction, SRC_OPENSSL, buf, len);
+	submit_event(direction, SRC_OPENSSL, conn, buf, len);
 }
 
 /* Records read state for the matching return probe. */
-static __always_inline int stash_read(void *buf, void *count_ptr)
+static __always_inline int stash_read(void *ssl, void *buf, void *count_ptr)
 {
 	__u64 id = bpf_get_current_pid_tgid();
 	struct read_args args = {
 		.buf = (__u64)buf,
 		.count_ptr = (__u64)count_ptr,
+		.conn = (__u64)ssl,
 	};
 
 	bpf_map_update_elem(&ssl_read_args, &id, &args, BPF_ANY);
@@ -99,7 +102,7 @@ SEC("uprobe/SSL_write")
 int BPF_UPROBE(probe_ssl_write, void *ssl, const void *buf, int num)
 {
 	if (num > 0)
-		emit(DIR_EGRESS, buf, (__u64)num);
+		emit(DIR_EGRESS, (__u64)ssl, buf, (__u64)num);
 	return 0;
 }
 
@@ -113,7 +116,7 @@ int BPF_UPROBE(probe_ssl_write, void *ssl, const void *buf, int num)
 SEC("uprobe/SSL_write_ex")
 int BPF_UPROBE(probe_ssl_write_ex, void *ssl, const void *buf, __u64 num)
 {
-	emit(DIR_EGRESS, buf, num);
+	emit(DIR_EGRESS, (__u64)ssl, buf, num);
 	return 0;
 }
 
@@ -121,7 +124,7 @@ int BPF_UPROBE(probe_ssl_write_ex, void *ssl, const void *buf, __u64 num)
 SEC("uprobe/SSL_read")
 int BPF_UPROBE(probe_ssl_read_entry, void *ssl, void *buf, int num)
 {
-	return stash_read(buf, NULL);
+	return stash_read(ssl, buf, NULL);
 }
 
 /*
@@ -143,7 +146,7 @@ int BPF_URETPROBE(probe_ssl_read_ret, int ret)
 		return 0;
 
 	if (ret > 0)
-		emit(DIR_INGRESS, (void *)args->buf, (__u64)ret);
+		emit(DIR_INGRESS, args->conn, (void *)args->buf, (__u64)ret);
 
 	bpf_map_delete_elem(&ssl_read_args, &id);
 	return 0;
@@ -154,7 +157,7 @@ SEC("uprobe/SSL_read_ex")
 int BPF_UPROBE(probe_ssl_read_ex_entry, void *ssl, void *buf, __u64 num,
 	       void *readbytes)
 {
-	return stash_read(buf, readbytes);
+	return stash_read(ssl, buf, readbytes);
 }
 
 /*
@@ -176,7 +179,7 @@ int BPF_URETPROBE(probe_ssl_read_ex_ret, int ret)
 	if (ret == 1 && args->count_ptr != 0) {
 		if (bpf_probe_read_user(&count, sizeof(count),
 					(void *)args->count_ptr) == 0 && count > 0)
-			emit(DIR_INGRESS, (void *)args->buf, count);
+			emit(DIR_INGRESS, args->conn, (void *)args->buf, count);
 	}
 
 	bpf_map_delete_elem(&ssl_read_args, &id);
