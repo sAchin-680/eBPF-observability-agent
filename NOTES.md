@@ -447,3 +447,70 @@ separate call before reading the record body.
 They also consume ring buffer capacity and inflate the event rate by about a
 factor of two, so filtering them in kernel space would directly reduce drop
 pressure.
+
+---
+
+## 2026-09-12 — HTTP/1.1 parsing
+
+### A method name alone is not enough to identify a request line
+
+**Context:** Captured payloads are arbitrary bytes read out of another process:
+TLS record headers, HTTP/2 frames, response bodies, and binary data all arrive
+through the same path as start lines.
+
+**Cause for concern:** Matching a request line loosely accepts things that are
+not requests. Response bodies contain prose beginning with method names —
+"GET the latest release from our downloads page" parses as a request to the
+path "the" unless a version string is also required.
+
+**Resolution:** Require an explicit method from a fixed list, a non-empty path,
+and a recognised version on the same line. Status codes are constrained to
+100–599 so that three digits occurring in binary data do not become a response.
+
+### The HTTP/2 preface parses cleanly as an HTTP/1.1 request
+
+**Context:** Guarding the case observed earlier, where curl and Go both
+negotiated HTTP/2 by default.
+
+**Symptom:** `PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n` satisfies every structural rule
+for a request line: a method-shaped token, a target, and a version.
+
+**Resolution:** PRI is excluded from the accepted methods, with a regression
+test. Without it every HTTP/2 connection would be reported as an HTTP/1.1
+request to the path "*", which is worse than reporting nothing: the traffic
+would appear in dashboards as real requests that never happened.
+
+### Header scanning must stop at the end of the headers
+
+**Context:** Extracting Host for service name inference.
+
+**Cause for concern:** A request body can contain a line shaped like a header.
+Scanning the whole captured prefix would read `Host:` out of a body supplied by
+whoever sent the request.
+
+**Resolution:** The scan stops at the blank line separating headers from body,
+with a test covering a body that carries a Host line.
+
+### Fuzzing found nothing, over ten million inputs
+
+**Context:** The parser reads bytes influenced by whoever is talking to the
+traced process, so a panic in it is a crash of the agent.
+
+**Result:** 10,438,535 executions in 30 seconds, no panics and no invariant
+violations. The invariants asserted were that a recognised request has a
+non-empty method and path, and a recognised response has a status in range.
+
+### Not every request produces a matching response event
+
+**Context:** First end-to-end run with parsing enabled.
+
+**Symptom:** 16 requests, 11 responses.
+
+**Cause:** Unconfirmed. A response is delivered across several reads, and the
+status line is only present in whichever read carries the start of the record
+body; reads that land elsewhere parse as nothing. Ring buffer drops were not
+reported during this run, so loss is not the explanation.
+
+**Worth carrying forward:** correlation cannot assume a response exists for
+every request. A request left unmatched needs an expiry path, or unmatched
+requests will accumulate for the lifetime of the agent.

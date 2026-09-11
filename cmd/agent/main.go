@@ -14,6 +14,7 @@ import (
 
 	"github.com/sAchin-680/ebpf-observability-agent/internal/capture"
 	"github.com/sAchin-680/ebpf-observability-agent/internal/ebpf"
+	"github.com/sAchin-680/ebpf-observability-agent/internal/httpparse"
 )
 
 // rescanInterval controls how often the agent looks for TLS libraries and Go
@@ -91,38 +92,46 @@ func attach(t *ebpf.Tracer, announce bool) {
 	}
 }
 
-// printEvent renders one captured payload. This is the placeholder consumer
-// until the HTTP parser takes over: it prints the payload's first line, which
-// for HTTP/1.1 is the request line or the status line.
+// printEvent renders one captured payload.
+//
+// Payloads that are not HTTP are discarded here rather than reported. Roughly
+// half of all captured events are five-byte TLS record headers, and response
+// bodies arrive through the same path as start lines; passing those on as
+// telemetry would report traffic that does not exist.
+//
+// This is the placeholder consumer until correlation pairs requests with their
+// responses into single records.
 func printEvent(e capture.Event) {
+	m, ok := httpparse.Parse(e.Data)
+	if !ok {
+		return
+	}
+
 	note := ""
 	if e.Truncated() {
 		note = " trunc/" + strconv.FormatUint(e.Len, 10)
 	}
-	fmt.Printf("%-7s %-7s pid=%-7d comm=%-15s len=%-5d%-12s %s\n",
-		e.Source, e.Direction, e.PID, e.Comm, e.Len, note, firstLine(e.Data))
+
+	switch m.Kind {
+	case httpparse.Request:
+		host := m.Host
+		if host == "" {
+			host = "-"
+		}
+		fmt.Printf("%-7s req  pid=%-7d comm=%-15s %-7s %-24s host=%s%s\n",
+			e.Source, e.PID, e.Comm, m.Method, truncate(m.Path, 24), host, note)
+	case httpparse.Response:
+		fmt.Printf("%-7s resp pid=%-7d comm=%-15s %d %s%s\n",
+			e.Source, e.PID, e.Comm, m.Status, m.Reason, note)
+	}
 }
 
-// firstLine returns the printable prefix of the payload up to the first line
-// break, so that a binary protocol produces a short marker rather than pages of
-// control characters.
-func firstLine(b []byte) string {
-	const limit = 96
-	out := make([]rune, 0, limit)
-	for _, c := range b {
-		if c == '\r' || c == '\n' {
-			break
-		}
-		if c < 0x20 || c > 0x7e {
-			out = append(out, '.')
-		} else {
-			out = append(out, rune(c))
-		}
-		if len(out) == limit {
-			break
-		}
+// truncate shortens a field to keep the output aligned.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
 	}
-	return string(out)
+	return s[:n-1] + "\u2026"
 }
 
 func plural(n int, one, many string) string {
