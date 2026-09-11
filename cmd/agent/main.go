@@ -35,7 +35,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("attaching probes: %v", err)
 	}
-	log.Printf("tracing %d TLS %s", n, plural(n, "library", "libraries"))
+	g, err := tracer.AttachGoBinaries()
+	if err != nil {
+		log.Printf("go discovery: %v", err)
+	}
+	log.Printf("tracing %d TLS %s and %d Go %s",
+		n, plural(n, "library", "libraries"), g, plural(g, "binary", "binaries"))
 	log.Printf("capture output: sudo cat /sys/kernel/tracing/trace_pipe")
 
 	stop := make(chan os.Signal, 1)
@@ -49,6 +54,9 @@ func main() {
 		case <-ticker.C:
 			if _, err := tracer.AttachAll(); err != nil {
 				log.Printf("rescan: %v", err)
+			}
+			if _, err := tracer.AttachGoBinaries(); err != nil {
+				log.Printf("rescan (go): %v", err)
 			}
 		case <-stop:
 			log.Printf("detaching")
