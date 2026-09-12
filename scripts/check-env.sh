@@ -7,7 +7,14 @@
 # Ground Rule 4 applies to your own environment too: don't assume BTF is there,
 # check that the file exists.
 
-set -uo pipefail
+# No pipefail.
+#
+# Nearly every check here is a pipeline ending in grep -q, which exits on its
+# first match and closes the pipe. The producer then dies of SIGPIPE with status
+# 141, and under pipefail that becomes the pipeline's status — so a check
+# inverts: the symbol is found, and the check reports it missing. This script
+# reported exactly that for SSL_write on a library that plainly exports it.
+set -u
 pass=0; fail=0
 ok()   { printf "  \033[32mPASS\033[0m  %-34s %s\n" "$1" "${2:-}"; pass=$((pass+1)); }
 bad()  { printf "  \033[31mFAIL\033[0m  %-34s %s\n" "$1" "${2:-}"; fail=$((fail+1)); }
@@ -109,7 +116,9 @@ if [ -n "${so:-}" ]; then
   # Symbols carry a version suffix (SSL_write@@OPENSSL_3.0.0), so match the
   # base name up to the '@'. Anything matching on an exact end-of-line will
   # report a false negative on any versioned shared library.
-  if nm -D "$so" 2>/dev/null | grep -qE ' T SSL_write(@|$)'; then
+  # grep -c rather than -q: it reads all of its input, so the producer is never
+  # signalled, and the result is a count rather than an exit status.
+  if [ "$(nm -D "$so" 2>/dev/null | grep -cE ' T SSL_write(@|$)')" -gt 0 ]; then
     note "SSL_write is an exported, versioned dynamic symbol — uprobe attach is viable"
   else
     bad "SSL_write symbol" "not exported by $so — uprobe attach by name will fail"

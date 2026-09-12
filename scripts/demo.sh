@@ -11,7 +11,9 @@
 #
 # Record the terminal while this runs. It is paced for reading.
 
-set -uo pipefail
+# No pipefail: pipelines here end in tools that stop reading early, which
+# leaves the producer killed by SIGPIPE and turns a success into a failure.
+set -u
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"

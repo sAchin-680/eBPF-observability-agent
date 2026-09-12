@@ -11,7 +11,9 @@
 #
 # Run from the repository root as your normal user.
 
-set -uo pipefail
+# No pipefail: a pipeline ending in grep -q reports failure when the producer is
+# killed by SIGPIPE after the match, which inverts the check.
+set -u
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 export PATH="$PATH:/usr/local/go/bin"
 
@@ -85,7 +87,7 @@ ok "neither '$NEW_SERVICE' nor port $NEW_PORT appears in cmd/ internal/ bpf/ dep
 # is an interpreted language, which applies to every Ruby program ever written.
 # It is not knowledge that this service exists, and removing it would not
 # prevent the service being traced — it would only make the inferred name worse.
-if grep -rl '"ruby"' --include='*.go' internal 2>/dev/null | head -1 | grep -q .; then
+if [ "$(grep -rl '"ruby"' --include='*.go' internal 2>/dev/null | wc -l)" -gt 0 ]; then
   printf "   \033[2m%s\033[0m\n" \
     "note: 'ruby' appears in the generic-interpreter list in internal/proc/service.go." \
     "      That is language-level knowledge, not service-level, and affects only" \

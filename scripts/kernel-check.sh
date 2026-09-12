@@ -13,7 +13,9 @@
 #
 #   scripts/kernel-check.sh [path-to-agent]
 
-set -uo pipefail
+# No pipefail: a pipeline ending in grep -q reports failure when the producer is
+# killed by SIGPIPE after the match, which inverts the check.
+set -u
 
 AGENT="${1:-/workspace/bin/agent}"
 LOG=/tmp/kernel-check-agent.log
@@ -102,7 +104,7 @@ else
   bad "captures TLS payloads" "no events observed"
 fi
 
-if curl -s --max-time 2 "$METRICS/metrics" | grep -q "^ebpf_agent_events_dropped_total"; then
+if [ "$(curl -s --max-time 2 "$METRICS/metrics" | grep -c "^ebpf_agent_events_dropped_total")" -gt 0 ]; then
   ok "reports its own health" "metrics endpoint serving"
 else
   bad "reports its own health" "metrics absent"

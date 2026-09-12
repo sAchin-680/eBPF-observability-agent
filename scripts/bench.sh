@@ -14,7 +14,9 @@
 #
 #   scripts/bench.sh [-d duration] [-r "rates"] [-n repeats] [-o name]
 
-set -uo pipefail
+# No pipefail: pipelines here end in tools that stop reading early, which
+# leaves the producer killed by SIGPIPE and turns a success into a failure.
+set -u
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 export PATH="$PATH:/usr/local/go/bin:$HOME/go/bin"
 
