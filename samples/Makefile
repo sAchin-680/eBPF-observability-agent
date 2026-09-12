@@ -70,6 +70,11 @@ traffic: ## Generate a mixed request load against all three services
 	done
 	@echo ">> 21 requests sent across three services"
 
+.PHONY: traffic-loop
+traffic-loop: ## Generate traffic continuously until interrupted (for live dashboards)
+	@echo ">> generating traffic every 2s; Ctrl-C to stop"
+	@while true; do $(MAKE) --no-print-directory traffic >/dev/null 2>&1; sleep 2; done
+
 .PHONY: load
 load: ## Sustained load for benchmarking (N=requests per endpoint)
 	@N=$${N:-50}; \
