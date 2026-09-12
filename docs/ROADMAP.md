@@ -11,33 +11,33 @@ Success criteria for each phase are in [requirements.md](requirements.md).
 
 ---
 
-## Phase 1 — Core tracing
+## Phase 1 — Core tracing · complete
 
 Establish the kernel-to-userspace data path and prove zero-instrumentation
 capture across three language runtimes.
 
 **Deliverables**
 
-- [ ] Agent traces three unmodified sample applications
-- [ ] Data-path diagram committed
-- [ ] Recording of an empty source diff alongside live traces
+- [x] Agent traces three unmodified sample applications
+- [x] Data-path diagram committed — [data-path.md](data-path.md)
+- [ ] Recording of an empty source diff alongside live traces — `scripts/demo.sh` runs; the recording has not been captured
 
 **Tasks**
 
 | # | Task | State |
 | :--- | :--- | :--- |
 | 1 | `clang -target bpf` build pipeline and `vmlinux.h` generation | Complete |
-| 2 | Minimal uprobe program for `SSL_write` / `SSL_read` | |
-| 3 | Symbol resolution for dynamically-loaded `libssl.so` | |
-| 4 | Symbol resolution for statically-linked Go binaries | |
-| 5 | kprobe or tracepoint for socket 4-tuple correlation | |
-| 6 | `BPF_MAP_TYPE_RINGBUF` map and `ringbuf.NewReader()` in the agent | |
-| 7 | Minimal HTTP/1.1 parser — method, path, status, timing | |
-| 8 | Correlation logic: payload event plus socket event into a request record | |
-| 9 | Three sample applications (Go, Flask, Express) over HTTP and HTTPS | |
-| 10 | Agent startup: `/proc` scan plus `sched_process_exec` for new processes | |
-| 11 | Demo recording: empty diff and live traces | |
-| 12 | Data-path diagram | |
+| 2 | Minimal uprobe program for `SSL_write` / `SSL_read` | Complete — `bpf/ssl.bpf.c`, four OpenSSL entry points |
+| 3 | Symbol resolution for dynamically-loaded `libssl.so` | Complete — `internal/proc/discover.go`, per-process `/proc` maps |
+| 4 | Symbol resolution for statically-linked Go binaries | Complete — `internal/proc/gobin.go`, return-site probes |
+| 5 | kprobe or tracepoint for socket 4-tuple correlation | Complete — `bpf/sock.bpf.c`, IPv4 and IPv6 |
+| 6 | `BPF_MAP_TYPE_RINGBUF` map and `ringbuf.NewReader()` in the agent | Complete — `bpf/capture.h`, with drop accounting |
+| 7 | Minimal HTTP/1.1 parser — method, path, status, timing | Complete — `internal/httpparse/` |
+| 8 | Correlation logic: payload event plus socket event into a request record | Complete — `internal/correlate/` |
+| 9 | Three sample applications (Go, Flask, Express) over HTTP and HTTPS | Complete — `samples/`, four services |
+| 10 | Agent startup: `/proc` scan plus `sched_process_exec` for new processes | Complete — `bpf/discover.bpf.c` |
+| 11 | Demo recording: empty diff and live traces | Script ready, not recorded |
+| 12 | Data-path diagram | Complete — [data-path.md](data-path.md) |
 
 **Build order.** Tasks are listed by dependency, not by execution order. One
 language runs end to end first — kernel hook through ring buffer to parsed
@@ -59,31 +59,31 @@ trace is useful.
 
 ---
 
-## Phase 2 — Observability pipeline
+## Phase 2 — Observability pipeline · complete
 
 Convert request records into OpenTelemetry telemetry and prove that a
 previously unseen application requires no configuration.
 
 **Deliverables**
 
-- [ ] Dashboards committed as JSON
-- [ ] Demonstration of a fourth, unseen application appearing with no config change
+- [x] Dashboards committed as JSON — [deploy/compose/grafana/dashboards/](../deploy/compose/grafana/dashboards/)
+- [x] Demonstration of a fourth, unseen application appearing with no config change — `scripts/gate-phase2.sh` passes
 
 **Tasks**
 
-| # | Task |
-| :--- | :--- |
-| 1 | OpenTelemetry Go SDK on the agent side only |
-| 2 | Request record to OTel span: service name inference, duration, status, generated trace ID |
-| 3 | Docker Compose stack: Tempo, Prometheus or Mimir, Grafana |
-| 4 | Export spans to Tempo and metrics to Prometheus or Mimir |
-| 5 | Grafana dashboard JSON: request rate, error rate, latency histogram by inferred service |
-| 6 | Diagnosis view: highest error rate and p99 latency by service |
-| 7 | Fourth sample application, verified to appear with no configuration change |
+| # | Task | State |
+| :--- | :--- | :--- |
+| 1 | OpenTelemetry Go SDK on the agent side only | Complete |
+| 2 | Request record to OTel span: service name inference, duration, status, generated trace ID | Complete — one provider per service |
+| 3 | Docker Compose stack: Tempo, Prometheus, Grafana | Complete — [deploy/compose/](../deploy/compose/) |
+| 4 | Export spans to Tempo and metrics to Prometheus | Complete — traces pushed, metrics scraped |
+| 5 | Grafana dashboard JSON | Complete — 13 panels |
+| 6 | Diagnosis view: highest error rate and p99 latency by service | Complete — 4 ranked panels |
+| 7 | Fourth sample application, verified to appear with no configuration change | Complete — `scripts/gate-phase2.sh` |
 
 ---
 
-## Phase 3 — Correctness, safety, performance
+## Phase 3 — Correctness, safety, performance · complete
 
 Establish what the agent costs and where it breaks, with numbers rather than
 adjectives.
@@ -154,10 +154,10 @@ An ADR written retroactively tends to justify rather than record.
 | ADR | Decision | Written during |
 | :--- | :--- | :--- |
 | 001 | DaemonSet rather than sidecar | Phase 4 |
-| 002 | uprobes on TLS read/write rather than traffic mirroring | Phase 1, task 2 |
-| 003 | Tracepoints over kprobes where both exist | Phase 1, task 5 |
-| 004 | CO-RE rather than BCC | Phase 1, task 1 |
-| 005 | Per-request generated trace IDs, no context propagation | Phase 2, task 2 |
+| [002](adr/002-uprobes-on-tls-entry-points.md) | uprobes on TLS read/write rather than traffic mirroring | Written |
+| [003](adr/003-tracepoints-over-kprobes.md) | Tracepoints over kprobes where both exist | Written |
+| [004](adr/004-core-over-bcc.md) | CO-RE rather than BCC | Written |
+| [005](adr/005-generated-trace-ids.md) | Generate a trace ID per request, propagate no context | Written |
 | 006 | `CAP_BPF` and `CAP_PERFMON` rather than `--privileged` | Phase 4 |
 | 007 | Canary rollout rather than fleet-wide apply | Phase 4 |
 

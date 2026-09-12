@@ -49,7 +49,7 @@ now foreclosed.
 | [002](002-uprobes-on-tls-entry-points.md) | Capture plaintext at TLS library entry points | Accepted |
 | [003](003-tracepoints-over-kprobes.md) | Prefer tracepoints, record where a kprobe is unavoidable | Accepted |
 | [004](004-core-over-bcc.md) | Compile once with CO-RE rather than per host with BCC | Accepted |
-| 005 | Per-request generated trace IDs, no context propagation | Not yet written |
+| [005](005-generated-trace-ids.md) | Generate a trace ID per request, propagate no context | Accepted |
 | 006 | `CAP_BPF` and `CAP_PERFMON` rather than `--privileged` | Not yet written |
 | 007 | Canary rollout rather than fleet-wide apply | Not yet written |
 
