@@ -117,6 +117,7 @@ func main() {
 				DroppedEvents:   tracer.Drops(),
 				PendingRequests: corr.Pending(),
 				AttachedTargets: tracer.Attached(),
+				ReceivedEvents:  tracer.Received(),
 			}
 		}); err != nil {
 			log.Printf("registering self metrics: %v", err)

@@ -54,6 +54,10 @@ type Tracer struct {
 	// connection binding simply never happens.
 	sharedOpts *bpf.CollectionOptions
 
+	// received counts events read from the ring buffers. Accessed atomically
+	// because the readers run concurrently with the metrics callback.
+	received uint64
+
 	// mu guards links and attached. Attachment happens both from the startup
 	// scan and from the goroutines inspecting newly executed processes.
 	mu sync.Mutex

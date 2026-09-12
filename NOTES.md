@@ -959,3 +959,30 @@ so the agent traces it too, and its requests are counted alongside the server's.
 The measured rate is roughly double the server's, which is the right behaviour
 but means the drop threshold quoted in requests per second is not the threshold
 in events per second.
+
+### The drop threshold, and what the numbers do at saturation
+
+```
+rps    d p50     d p99   cpu     events/s   dropped    loss
+1000  +0.600ms  +1.500ms  1.54s     4,003         0    0.00%
+2000  +0.300ms  +0.400ms  1.78s     7,987         0    0.00%
+3000  +0.200ms  +0.100ms  2.23s    11,979       292    0.05%
+4000  +0.200ms  +0.100ms  2.81s    15,763     5,154    1.08%
+6000  +0.100ms  +0.000ms  4.08s    23,176    18,437    2.57%
+8000  +0.100ms  +0.050ms  4.01s    19,311   376,364   39.38%
+```
+
+**Loss begins between 8,000 and 12,000 events per second.**
+
+Two things in this table are worth noticing.
+
+Overhead falls as load rises, from +0.6ms to +0.1ms. The per-request cost of the
+probes does not change; the baseline does. The busier the machine, the smaller a
+fixed cost looks beside it — which is the same effect that made the idle
+comparison invert earlier, appearing here in a less misleading form.
+
+At 8,000 req/s events received *falls*, from 23,176/s to 19,311/s, while loss
+reaches 39%. Fewer events are seen because more are discarded before they can
+be. A throughput figure that decreases as offered load increases is the
+signature of a saturated system, and the latency figures at that point describe
+an agent observing three fifths of its traffic.
