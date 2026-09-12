@@ -20,6 +20,15 @@ import (
 // timestamps, rather than from when the agent happened to process the record.
 // Anything else would measure the agent's own scheduling.
 func (e *Exporter) Record(ctx context.Context, r correlate.Record, service string) {
+	// Metrics are recorded whether or not traces are exported, so that the
+	// agent's own measurements remain available when there is nowhere to send
+	// spans.
+	defer e.metrics.record(ctx, r, service)
+
+	if !e.TracesEnabled() {
+		return
+	}
+
 	tracer := e.tracerFor(service)
 
 	kind := trace.SpanKindServer
@@ -63,8 +72,6 @@ func (e *Exporter) Record(ctx context.Context, r correlate.Record, service strin
 	}
 
 	span.End(trace.WithTimestamp(end))
-
-	e.metrics.record(ctx, r, service)
 }
 
 // spanName follows the HTTP semantic conventions, which call for the method and

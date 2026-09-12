@@ -63,13 +63,36 @@ type Exporter struct {
 	providers map[string]*sdktrace.TracerProvider
 }
 
-// New connects to the trace backend and starts the metrics endpoint.
+// New starts the metrics endpoint and, if an endpoint is configured, connects
+// to the trace backend.
 //
-// Connection is lazy: the OTLP exporter does not require the backend to be
-// reachable at startup and retries in the background. An agent that refused to
-// start because a backend was down would stop tracing a node in order to report
-// that it could not report.
+// The two are independent. Traces can be disabled while metrics continue, which
+// is what benchmarking requires — exporting traces means opening TLS
+// connections the agent would then trace, and its own export cost would be
+// counted as capture cost. It is also what a node needs when a trace backend is
+// unreachable: the agent's own health is still worth reporting, and an agent
+// that reported nothing because it could not reach one place would be
+// indistinguishable from an agent that had stopped.
+//
+// Trace connection is lazy. The OTLP exporter does not require the backend to
+// be reachable at startup and retries in the background, so a backend that is
+// down delays telemetry rather than preventing tracing.
 func New(ctx context.Context, cfg Config) (*Exporter, error) {
+	m, err := newMetrics(cfg.MetricsAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	e := &Exporter{
+		cfg:       cfg,
+		metrics:   m,
+		providers: make(map[string]*sdktrace.TracerProvider),
+	}
+
+	if cfg.Endpoint == "" {
+		return e, nil
+	}
+
 	opts := []otlptracegrpc.Option{otlptracegrpc.WithEndpoint(cfg.Endpoint)}
 	if cfg.Insecure {
 		opts = append(opts, otlptracegrpc.WithInsecure())
@@ -77,22 +100,15 @@ func New(ctx context.Context, cfg Config) (*Exporter, error) {
 
 	traceExp, err := otlptracegrpc.New(ctx, opts...)
 	if err != nil {
+		m.shutdown(ctx)
 		return nil, fmt.Errorf("creating OTLP trace exporter: %w", err)
 	}
-
-	m, err := newMetrics(cfg.MetricsAddr)
-	if err != nil {
-		traceExp.Shutdown(ctx)
-		return nil, err
-	}
-
-	return &Exporter{
-		cfg:       cfg,
-		traceExp:  traceExp,
-		metrics:   m,
-		providers: make(map[string]*sdktrace.TracerProvider),
-	}, nil
+	e.traceExp = traceExp
+	return e, nil
 }
+
+// TracesEnabled reports whether spans are exported.
+func (e *Exporter) TracesEnabled() bool { return e.traceExp != nil }
 
 // tracerFor returns the tracer for a service, creating its provider on first
 // use.
@@ -143,8 +159,10 @@ func (e *Exporter) Shutdown(ctx context.Context) error {
 			firstErr = err
 		}
 	}
-	if err := e.traceExp.Shutdown(ctx); err != nil && firstErr == nil {
-		firstErr = err
+	if e.traceExp != nil {
+		if err := e.traceExp.Shutdown(ctx); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 	if err := e.metrics.shutdown(ctx); err != nil && firstErr == nil {
 		firstErr = err

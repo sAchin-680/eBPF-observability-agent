@@ -60,10 +60,11 @@ func main() {
 		cancel()
 	}()
 
-	// Export is optional so the agent stays usable, and debuggable, when no
-	// backend is reachable.
+	// Started unconditionally: the endpoint controls trace export only, and the
+	// agent's own metrics are worth serving regardless of whether a trace
+	// backend exists.
 	var exporter *otel.Exporter
-	if *otlpEndpoint != "" {
+	{
 		exporter, err = otel.New(ctx, otel.Config{
 			Endpoint:     *otlpEndpoint,
 			Insecure:     true,
@@ -82,14 +83,18 @@ func main() {
 				log.Printf("flushing telemetry: %v", err)
 			}
 		}()
-		log.Printf("exporting traces to %s, metrics on %s", *otlpEndpoint, *metricsAddr)
+		if exporter.TracesEnabled() {
+			log.Printf("exporting traces to %s, metrics on %s", *otlpEndpoint, *metricsAddr)
+		} else {
+			log.Printf("trace export disabled, metrics on %s", *metricsAddr)
+		}
 	}
 
 	names := newServiceNames()
 
 	// One correlator, driven from the reader, so no locking is needed.
 	corr := correlate.New(correlate.DefaultTTL, func(r correlate.Record) {
-		if *printRecords || exporter == nil {
+		if *printRecords || !exporter.TracesEnabled() {
 			printRecord(r)
 		}
 		if exporter != nil {
@@ -103,6 +108,20 @@ func main() {
 		}
 		return t.Source.String(), t.Destination.String(), true
 	})
+
+	if exporter != nil {
+		// Registered after the correlator exists, since its state is part of
+		// what is reported.
+		if err := exporter.RegisterSelfMetrics(func() otel.SelfState {
+			return otel.SelfState{
+				DroppedEvents:   tracer.Drops(),
+				PendingRequests: corr.Pending(),
+				AttachedTargets: tracer.Attached(),
+			}
+		}); err != nil {
+			log.Printf("registering self metrics: %v", err)
+		}
+	}
 
 	// Expiry runs on a timer because an unanswered request is only detectable
 	// by the absence of a response, which produces no event to react to.
