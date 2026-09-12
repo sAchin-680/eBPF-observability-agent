@@ -137,6 +137,17 @@ func (t *Tracer) reportDrops(ctx context.Context, srcs []ringSource) {
 	}
 }
 
+// Attached reports how many distinct libraries and executables are probed.
+//
+// Reported as the agent's own health rather than as telemetry about a service:
+// a count that stops growing while new processes start means discovery has
+// stalled, which is indistinguishable from quiet traffic unless it is measured.
+func (t *Tracer) Attached() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.attached)
+}
+
 // Drops returns the total number of events lost per source since start.
 func (t *Tracer) Drops() map[string]uint64 {
 	out := make(map[string]uint64)

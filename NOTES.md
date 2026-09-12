@@ -900,3 +900,62 @@ but places it where a backend grouping by resource will not find it.
 ```
 Tempo service.name values: ["curl","go-api","node-express","python-flask"]
 ```
+
+---
+
+## 2026-09-13 — Overhead measurement
+
+### The first benchmark reported the agent making requests faster
+
+**Symptom:** Every run, at every rate, in both orderings:
+
+```
+untraced 1000 req/s: p50 1.550ms
+traced   1000 req/s: p50 0.900ms
+```
+
+**Cause, after two wrong guesses.** The first was warm-up: the untraced arm ran
+first and absorbed TLS setup, lazy initialisation and cold caches. Adding a
+discarded warm-up run did not remove the effect. The second was ordering within
+a pair, since whichever arm ran second benefited from the one before it.
+Alternating the order between repetitions did not remove it either.
+
+It was neither. An **idle machine is slower than a busy one**. Cores drop into
+low-power states, and a request arriving at an idle core waits for it to come
+back. Any additional load reduces latency, whatever that load is doing.
+
+**Resolution:** A third arm that burns comparable CPU while observing nothing —
+no probes, no kernel programs.
+
+```
+rps     p50 idle   p50 control   p50 agent   agent - control
+1000      1.550        0.250       0.900          +0.650
+4000      1.100        0.200       0.400          +0.200
+```
+
+The control is six times faster than idle, which is the whole effect. The
+agent's cost is its difference from the control, not from an idle machine.
+
+**Worth carrying forward:** comparing against an idle baseline does not merely
+understate the cost, it reverses its sign. A benchmark that reported the agent
+as free would have been believed, because it flattered the thing being
+measured. The result was only questioned because it was impossible — a probe
+cannot make a request faster. An implausible-but-possible result in the same
+direction would have gone unexamined.
+
+### Ring buffer drops begin between 1000 and 4000 requests per second
+
+```
+1000 req/s: 0 dropped
+4000 req/s: 1230 dropped over two 10s runs
+```
+
+The exact threshold is not yet established; these were ten-second runs at two
+widely spaced rates, on four cores shared with the load generator and the
+server. Narrowing it requires a finer sweep and longer runs.
+
+**Worth carrying forward:** the load generator is a Go program using crypto/tls,
+so the agent traces it too, and its requests are counted alongside the server's.
+The measured rate is roughly double the server's, which is the right behaviour
+but means the drop threshold quoted in requests per second is not the threshold
+in events per second.

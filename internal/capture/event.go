@@ -73,8 +73,8 @@ type Event struct {
 	// events; it is not wall-clock time.
 	Timestamp time.Duration
 
-	PID       uint32
-	TID       uint32
+	PID uint32
+	TID uint32
 
 	// Conn identifies the TLS connection this payload belongs to: OpenSSL's
 	// SSL* or Go's *tls.Conn. It is an address inside the traced process,
