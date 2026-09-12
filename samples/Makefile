@@ -90,12 +90,11 @@ stop: ## Stop all services
 	@# Matched on process name rather than command line: the services are
 	@# started from their own directories, so the command line is a bare
 	@# relative path that no directory-qualified pattern matches.
-	@pkill -x go-api 2>/dev/null || true
-	@pkill -f 'python.*app\.py' 2>/dev/null || true
-	@pkill -f 'node.*server\.js' 2>/dev/null || true
-	@sleep 1
-	@echo ">> stopped"
-
+	@#
+	@# Verified rather than assumed. A stop that quietly fails leaves a stale
+	@# service listening, and a later run then demonstrates nothing: the
+	@# services it claims to have started were already there.
+	@bash stop.sh
 .PHONY: clean
 clean: stop ## Stop services and remove build artifacts
 	@rm -rf $(CERT_DIR) $(LOG_DIR) go-api/go-api python-flask/.venv node-express/node_modules

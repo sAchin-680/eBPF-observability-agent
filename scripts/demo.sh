@@ -20,21 +20,45 @@ cd "$REPO"
 # that the sample services are built with.
 export PATH="$PATH:/usr/local/go/bin"
 
+# Never invoke a pager. Under a terminal recorder there is no one to press a
+# key, so a paged command blocks the run indefinitely.
+export GIT_PAGER=cat
+export PAGER=cat
+: "${TERM:=xterm-256color}"
+export TERM
+
 # Only the agent needs privilege. The services run as the invoking user, which
 # is both how they would run in reality and a requirement here: the working tree
 # is a shared mount where the guest's root maps to an unprivileged host user and
 # cannot write.
-AS_USER=(env)
-if [ -n "${SUDO_USER:-}" ]; then
-  AS_USER=(sudo -u "$SUDO_USER" env "PATH=$PATH")
+# Run this script as your normal user. Only the agent is elevated.
+#
+# The inverse — running the whole script as root and dropping privilege for the
+# services — fails in two ways that are easy to miss: the services end up owned
+# by root and a later unprivileged stop cannot kill them, and the nested
+# privilege drop blocks when the script runs under a terminal recorder.
+if [ "$(id -u)" -eq 0 ]; then
+  echo "Run as your normal user, not root. The agent elevates itself." >&2
+  exit 1
 fi
-samples() { "${AS_USER[@]}" make -C "$REPO/samples" "$@"; }
+if ! sudo -n true 2>/dev/null; then
+  echo "Passwordless sudo is required to load the agent's kernel programs." >&2
+  exit 1
+fi
+samples() { make -C "$REPO/samples" "$@"; }
+
+# The agent's log lives in the working tree, not /tmp. A shared temp directory
+# accumulates files owned by whichever user last ran the demo, and the next run
+# then cannot write its own log — while still finding the previous one to read.
+AGENT_LOG="$REPO/samples/logs/agent.log"
+mkdir -p "$(dirname "$AGENT_LOG")"
+rm -f "$AGENT_LOG"
 
 bold()  { printf "\n\033[1m%s\033[0m\n" "$1"; }
 dim()   { printf "\033[2m%s\033[0m\n" "$1"; }
 pause() { sleep "${1:-3}"; }
 
-trap 'samples stop >/dev/null 2>&1; pkill -f bin/agent >/dev/null 2>&1' EXIT
+trap 'samples stop >/dev/null 2>&1; sudo pkill -f bin/agent >/dev/null 2>&1' EXIT
 
 # Building is a prerequisite rather than part of the demonstration. Compiling
 # mid-run produces a minute of unrelated output, and under sudo it rebuilds
@@ -97,14 +121,18 @@ pause 5
 bold "3. Start the agent — before the services exist"
 dim "   Nothing is running to trace yet. The agent attaches to processes as"
 dim "   they start, so it does not need to be restarted when they do."
-samples stop >/dev/null 2>&1
-pkill -f bin/agent >/dev/null 2>&1
+samples stop 2>&1 | grep -vE "^make(\[|:)" | sed 's/^/   /'
+sudo pkill -f bin/agent >/dev/null 2>&1
 sleep 1
 
-./bin/agent > /tmp/demo-agent.log 2>&1 &
+# Detached from this shell's session. Under a terminal recorder the session
+# receives signals the agent would otherwise catch, and it exits partway
+# through the run — after printing a startup line, so the failure looks like
+# an agent that traced nothing rather than one that was killed.
+sudo setsid ./bin/agent > "$AGENT_LOG" 2>&1 < /dev/null &
 sleep 5
 echo
-grep -E "tracing .* at startup" /tmp/demo-agent.log | sed 's/^/   /'
+grep -E "tracing .* at startup" "$AGENT_LOG" | sed 's/^/   /'
 pause 3
 
 # ---------------------------------------------------------------------------
@@ -113,7 +141,7 @@ samples run 2>&1 | grep -vE "^make(\[|:)" | sed 's/^/   /'
 sleep 3
 echo
 dim "   Attachments made after the agent was already running:"
-grep "samples/" /tmp/demo-agent.log | sed 's/^/   /' || echo "   (none)"
+grep "samples/" "$AGENT_LOG" | sed 's/^/   /' || echo "   (none)"
 pause 4
 
 # ---------------------------------------------------------------------------
@@ -125,7 +153,7 @@ sleep 3
 
 # ---------------------------------------------------------------------------
 bold "6. What the agent produced"
-grep -vE "^[0-9]{2}:" /tmp/demo-agent.log | head -24 | sed 's/^/   /'
+grep -vE "^[0-9]{2}:" "$AGENT_LOG" | head -24 | sed 's/^/   /'
 echo
 dim "   method, path, status, latency, and socket endpoints — from three"
 dim "   runtimes that were never touched."
@@ -133,9 +161,9 @@ pause 4
 
 # ---------------------------------------------------------------------------
 bold "7. Nothing was dropped or left unmatched"
-pkill -f bin/agent >/dev/null 2>&1
+sudo pkill -f bin/agent >/dev/null 2>&1
 sleep 2
-grep -E "requests=" /tmp/demo-agent.log | sed 's/^/   /'
+grep -E "requests=" "$AGENT_LOG" | sed 's/^/   /'
 echo
 dim "   non-http counts payloads discarded as not being HTTP, most of them"
 dim "   five-byte TLS record headers. expired counts requests whose response"
