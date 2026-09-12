@@ -1,0 +1,169 @@
+{
+  "uid": "ebpf-diagnosis",
+  "title": "Diagnosis",
+  "description": "Which service is worst, right now. Every panel is ranked so the answer is the top row rather than something to be found by reading a graph.",
+  "tags": ["ebpf", "triage"],
+  "timezone": "browser",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "window",
+        "label": "Window",
+        "type": "custom",
+        "description": "Shorter reacts faster and is noisier at low request rates; longer is steadier but slower to show a change.",
+        "query": "1m,5m,15m",
+        "current": { "text": "5m", "value": "5m" },
+        "options": [
+          { "text": "1m", "value": "1m", "selected": false },
+          { "text": "5m", "value": "5m", "selected": true },
+          { "text": "15m", "value": "15m", "selected": false }
+        ]
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "table",
+      "title": "Worst error rate",
+      "description": "Services ranked by the share of responses that are 5xx. Services with no captured responses are absent rather than shown as healthy.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sort_desc(sum by (service_name) (rate(http_server_requests_total{span_kind=\"server\", status_class=\"5xx\"}[$window])) / sum by (service_name) (rate(http_server_requests_total{span_kind=\"server\", status_class!=\"unknown\"}[$window])))",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        { "id": "organize", "options": {
+            "excludeByName": { "Time": true, "job": true, "instance": true, "telemetry_kind": true },
+            "renameByName": { "service_name": "Service", "Value": "Error rate" }
+        } }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "left" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Error rate" }, "properties": [
+              { "id": "unit", "value": "percentunit" },
+              { "id": "decimals", "value": 2 },
+              { "id": "custom.cellOptions", "value": { "type": "color-background" } },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "orange", "value": 0.01 },
+                  { "color": "red", "value": 0.05 }
+              ] } }
+          ] }
+        ]
+      },
+      "options": { "showHeader": true }
+    },
+    {
+      "type": "table",
+      "title": "Slowest by p99",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sort_desc(histogram_quantile(0.99, sum by (le, service_name) (rate(http_server_request_duration_seconds_bucket{span_kind=\"server\"}[$window]))))",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        { "id": "organize", "options": {
+            "excludeByName": { "Time": true, "job": true, "instance": true, "telemetry_kind": true },
+            "renameByName": { "service_name": "Service", "Value": "p99" }
+        } }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "left" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "p99" }, "properties": [
+              { "id": "unit", "value": "s" },
+              { "id": "decimals", "value": 4 },
+              { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } }
+          ] }
+        ]
+      },
+      "options": { "showHeader": true }
+    },
+    {
+      "type": "table",
+      "title": "Busiest endpoints",
+      "description": "Ranked by request volume over the dashboard's time range, so that an error rate can be weighed against how much traffic it affects.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(10, sum by (service_name, http_request_method) (increase(http_server_requests_total{span_kind=\"server\"}[$__range])))",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        { "id": "organize", "options": {
+            "excludeByName": { "Time": true, "job": true, "instance": true, "telemetry_kind": true },
+            "renameByName": { "service_name": "Service", "http_request_method": "Method", "Value": "Requests" }
+        } }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "left" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Requests" }, "properties": [
+              { "id": "decimals", "value": 0 },
+              { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } }
+          ] }
+        ]
+      },
+      "options": { "showHeader": true }
+    },
+    {
+      "type": "table",
+      "title": "Coverage gaps",
+      "description": "Requests whose response was never captured, ranked by service. These are not failures: the outcome is unobserved, which is a gap in the agent rather than in the service.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sort_desc(sum by (service_name) (increase(http_server_requests_total{status_class=\"unknown\"}[$__range])))",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        { "id": "organize", "options": {
+            "excludeByName": { "Time": true, "job": true, "instance": true, "telemetry_kind": true },
+            "renameByName": { "service_name": "Service", "Value": "Uncaptured responses" }
+        } },
+        { "id": "filterByValue", "options": {
+            "filters": [{ "fieldName": "Uncaptured responses", "config": { "id": "greater", "options": { "value": 0 } } }],
+            "type": "include",
+            "match": "all"
+        } }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "left" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Uncaptured responses" }, "properties": [
+              { "id": "decimals", "value": 0 },
+              { "id": "custom.cellOptions", "value": { "type": "color-background" } },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "orange", "value": 1 }
+              ] } }
+          ] }
+        ]
+      },
+      "options": { "showHeader": true }
+    }
+  ]
+}

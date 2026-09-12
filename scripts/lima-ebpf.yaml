@@ -42,13 +42,27 @@ mounts:
     mountPoint: "/workspace"
     writable: true
 
-# Ports we forward so you can hit Grafana/Tempo from the macOS browser later.
+# Forwarded so the stack is reachable from a browser on the host.
+#
+# Reach these as 127.0.0.1, not localhost. The forward binds IPv4 only, while
+# macOS resolves localhost to ::1 first — so if anything on the host is already
+# listening on the same port over IPv6, the browser silently reaches that
+# instead. A native Grafana on 3000 produces exactly this, and reports the
+# dashboard as missing, which is true of the service it actually reached.
+#
+# Host ports are offset where a collision is likely, so the default URL works
+# even when something else owns the conventional port.
 portForwards:
   - guestPort: 3000   # Grafana
+    hostPort: 3000
+  - guestPort: 3000   # Grafana, alternate host port if 3000 is taken
+    hostPort: 13000
   - guestPort: 3200   # Tempo
   - guestPort: 9090   # Prometheus
-  - guestPort: 8080   # sample apps
-  - guestPort: 8443
+  - guestPort: 9464   # the agent's own metrics endpoint
+  - guestPort: 8443   # sample services
+  - guestPort: 8444
+  - guestPort: 8445
 
 provision:
   - mode: system
