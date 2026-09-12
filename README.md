@@ -93,7 +93,9 @@ by a passing test or a recorded benchmark.
 | Process discovery via `sched_process_exec` | Complete |
 | OpenTelemetry export to Tempo and Prometheus | Not started |
 | Kubernetes DaemonSet deployment | Not started |
-| Measured overhead and ring buffer drop-rate benchmarks | Not started |
+| Measured overhead and ring buffer drop-rate benchmarks | Complete |
+| Multi-kernel validation, one binary on 5.15 and 6.8 | Complete |
+| Failure matrix, all four rows | Complete |
 
 The phase plan is in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 

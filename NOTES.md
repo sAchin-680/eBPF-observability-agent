@@ -1129,3 +1129,60 @@ readable and correct.
 **Worth carrying forward:** the instinct on a verifier rejection is to ask for
 more log. For a program near the complexity limit that is the one thing that
 makes the failure harder to diagnose.
+
+---
+
+## 2026-09-13 — Kernel compatibility
+
+### One binary, two kernels
+
+```
+binary sha256 fb600b07..., built once on 6.8
+
+check                            5.15.0-190    6.8.0-138
+kernel BTF                       pass          pass
+agent loads, relocations resolve pass          pass
+verifier accepts every program   pass          pass
+probes attach                    pass (2)      pass (6)
+socket endpoint capture          pass          pass
+captures TLS payloads            pass (23)     pass (24)
+reports its own health           pass          pass
+detaches cleanly                 pass          pass
+```
+
+The 5.15 host has no compiler and no Go, and mounts the working tree read only,
+so it cannot rebuild what it is testing. The check reports the binary's checksum
+so that two runs can be shown to have used the same file rather than two builds
+that happened to agree.
+
+**Worth carrying forward:** the socket probe attaches to `tcp_sendmsg`, an
+internal symbol, which ADR-003 records as a deliberate exception. It attached on
+both kernels, so the risk that decision accepted did not materialise across this
+range. That is an observation, not reassurance — the symbol is still unstable and
+the degradation path is still what makes the exception acceptable.
+
+The differing target counts are hosts, not kernels: 5.15 runs fewer Go binaries,
+so there is less to attach to.
+
+### Testing "no BTF" without maintaining a kernel nobody would deploy
+
+**Context:** Failure-matrix row 4 requires a kernel that cannot support CO-RE.
+Both available kernels carry BTF, and building one without it to keep around is
+disproportionate.
+
+**Resolution:** A private mount namespace with `/dev/null` bound over
+`/sys/kernel/btf/vmlinux`. What the agent can observe is identical — the file
+cannot be read — and the host's own BTF is untouched, so no cleanup is needed.
+
+```
+socket endpoints unavailable: ... parsing .BTF header: can't read header: EOF
+loading kernel programs:      ... parsing .BTF header: can't read header: EOF
+```
+
+**Worth carrying forward:** the order of those two lines is the designed
+behaviour. The socket program degrades first and the agent continues; the
+capture programs then fail and it does not. Endpoints are an enrichment, capture
+is the purpose, and the distinction is visible in what is fatal.
+
+The agent exits, leaves nothing loaded, and the load average is unchanged before
+and after.

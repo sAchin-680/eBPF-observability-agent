@@ -8,8 +8,10 @@
 # first, so that a pass cannot be produced by a condition that was never set up
 # — a service that was already restarted, or an agent that was never running.
 #
-# Row 4 — a kernel without BTF — is not here. It needs a different kernel, and
-# belongs with the multi-kernel matrix.
+# Row 4 uses a private mount namespace to make BTF unreadable, rather than a
+# kernel built without it. What the agent can observe is identical — the file
+# cannot be read — and it does not require maintaining a kernel nobody would
+# deploy.
 #
 # Run from the repository root as your normal user:
 #
@@ -238,12 +240,61 @@ row_drops_visible() {
 }
 
 # ---------------------------------------------------------------------------
+# Row 4 — a kernel that cannot support CO-RE
+# ---------------------------------------------------------------------------
+#
+# The agent must refuse to load and say why, without leaving probes attached or
+# otherwise affecting the node. A partial load would be worse than no load: some
+# programs attached, some not, and no indication which.
+row_no_btf() {
+  bold "Row 4: kernel without readable BTF"
+  info "expected: the agent fails to load, names the cause, and the node is unaffected"
+
+  stop_agent
+  local before_load out
+  before_load=$(awk '{print $1}' /proc/loadavg)
+
+  # The bind mount exists only inside this namespace, so the host's own BTF is
+  # untouched and no cleanup is needed.
+  out=$(sudo unshare -m bash -c \
+    'mount --bind /dev/null /sys/kernel/btf/vmlinux; timeout 30 ./bin/agent --otlp-endpoint= --metrics-addr=:9465 2>&1' \
+    2>&1 | head -6)
+
+  if grep -qi "BTF" <<<"$out"; then
+    ok "failed with an error naming BTF"
+    info "$(grep -io "parsing .BTF header[^\"]*" <<<"$out" | head -1)"
+  else
+    bad "the failure did not identify BTF as the cause"
+    sed 's/^/            /' <<<"$out"
+    FAILED=1
+  fi
+
+  if pgrep -x agent >/dev/null; then
+    bad "the agent is still running after failing to load"
+    FAILED=1
+  else
+    ok "did not remain running"
+  fi
+
+  # Nothing should be left attached by a load that did not complete.
+  if sudo bpftool prog list 2>/dev/null | grep -q "probe_ssl"; then
+    bad "programs remain loaded after a failed start"
+    FAILED=1
+  else
+    ok "left nothing loaded"
+  fi
+
+  info "load average before $before_load, after $(awk '{print $1}' /proc/loadavg)"
+}
+
+# ---------------------------------------------------------------------------
 case "${1:-all}" in
   restart) row_restart ;;
   crash)   row_agent_crash ;;
   drops)   row_drops_visible ;;
-  all)     row_restart; row_drops_visible; row_agent_crash ;;
-  *)       echo "usage: $0 [restart|drops|crash|all]" >&2; exit 1 ;;
+  btf)     row_no_btf ;;
+  all)     row_restart; row_drops_visible; row_agent_crash; row_no_btf ;;
+  *)       echo "usage: $0 [restart|drops|crash|btf|all]" >&2; exit 1 ;;
 esac
 
 make -C samples stop >/dev/null 2>&1
