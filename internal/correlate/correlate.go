@@ -5,6 +5,8 @@ package correlate
 import (
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/sAchin-680/ebpf-observability-agent/internal/capture"
 	"github.com/sAchin-680/ebpf-observability-agent/internal/httpparse"
 )
@@ -41,6 +43,27 @@ func (o Outcome) String() string {
 	return "completed"
 }
 
+// Kind distinguishes which side of an exchange a process was on.
+//
+// The agent sees both ends of a local call — the client writing the request and
+// the server reading it — and produces a record for each. Without this
+// distinction every local request is counted twice.
+type Kind uint8
+
+const (
+	// Server means the process received the request.
+	Server Kind = iota
+	// Client means the process sent it.
+	Client
+)
+
+func (k Kind) String() string {
+	if k == Client {
+		return "client"
+	}
+	return "server"
+}
+
 // Record is one request and its response, reconstructed from captured payloads.
 type Record struct {
 	Method string
@@ -54,6 +77,17 @@ type Record struct {
 	// Duration between the request payload and the response payload, measured
 	// from kernel monotonic timestamps.
 	Duration time.Duration
+
+	// Kind is derived from the direction of the request payload: a process
+	// that read the request is serving it, one that wrote it is calling.
+	Kind Kind
+
+	// StartWall is when the request was observed, in wall-clock time.
+	//
+	// Kernel timestamps are monotonic since boot and cannot be placed on a
+	// timeline on their own. Converting them requires the offset between the
+	// two clocks, which is measured once at startup rather than read per event.
+	StartWall time.Time
 
 	PID     uint32
 	Comm    string
@@ -109,6 +143,10 @@ type Correlator struct {
 	pending map[connKey]pending
 	stats   Stats
 
+	// bootTime is the wall-clock instant the kernel's monotonic clock reads
+	// zero, used to place monotonic event timestamps on a real timeline.
+	bootTime time.Time
+
 	// now is the latest kernel timestamp observed. Expiry is driven by event
 	// time rather than wall-clock time so that behaviour is reproducible in
 	// tests and unaffected by how long userspace took to drain the buffer.
@@ -126,9 +164,10 @@ func New(ttl time.Duration, emit func(Record)) *Correlator {
 		ttl = DefaultTTL
 	}
 	return &Correlator{
-		ttl:     ttl,
-		emit:    emit,
-		pending: make(map[connKey]pending),
+		ttl:      ttl,
+		emit:     emit,
+		bootTime: estimateBootTime(),
+		pending:  make(map[connKey]pending),
 	}
 }
 
@@ -204,19 +243,41 @@ func (c *Correlator) emitRecord(req pending, resp httpparse.Message, d time.Dura
 		local, peer, _ = c.endpoints(req.ev.PID, req.ev.Conn)
 	}
 
+	kind := Server
+	if req.ev.Direction == capture.Egress {
+		kind = Client
+	}
+
 	c.emit(Record{
-		Method:   req.msg.Method,
-		Path:     req.msg.Path,
-		Host:     req.msg.Host,
-		Status:   resp.Status,
-		Reason:   resp.Reason,
-		Duration: d,
-		PID:      req.ev.PID,
-		Comm:     req.ev.Comm,
-		Source:   req.ev.Source,
-		Conn:     req.ev.Conn,
-		Outcome:  o,
-		Local:    local,
-		Peer:     peer,
+		Kind:      kind,
+		StartWall: c.bootTime.Add(req.seen),
+		Method:    req.msg.Method,
+		Path:      req.msg.Path,
+		Host:      req.msg.Host,
+		Status:    resp.Status,
+		Reason:    resp.Reason,
+		Duration:  d,
+		PID:       req.ev.PID,
+		Comm:      req.ev.Comm,
+		Source:    req.ev.Source,
+		Conn:      req.ev.Conn,
+		Outcome:   o,
+		Local:     local,
+		Peer:      peer,
 	})
+}
+
+// estimateBootTime returns the wall-clock instant corresponding to monotonic
+// time zero.
+//
+// Read once rather than per event: the two clocks drift relative to each other,
+// but over the lifetime of a request that drift is far smaller than the
+// measurement, and re-reading per event would make identical durations produce
+// different timestamps.
+func estimateBootTime() time.Time {
+	var ts unix.Timespec
+	if err := unix.ClockGettime(unix.CLOCK_BOOTTIME, &ts); err != nil {
+		return time.Now()
+	}
+	return time.Now().Add(-time.Duration(ts.Nano()))
 }

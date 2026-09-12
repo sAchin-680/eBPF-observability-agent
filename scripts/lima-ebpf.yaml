@@ -68,6 +68,13 @@ provision:
         linux-tools-common linux-tools-generic bpftrace \
         build-essential make git curl jq \
         python3 python3-pip python3-venv
+      # -- local observability stack --------------------------------------
+      # Tempo, Prometheus and Grafana run as containers beside the agent. They
+      # are ordinary userspace processes with no bearing on the eBPF work; the
+      # agent exports to them over the network like any other backend.
+      apt-get install -y --no-install-recommends docker.io docker-compose-v2
+      systemctl enable --now docker
+
       # -- sample-app runtimes --------------------------------------------
       # Node is installed from the distribution rather than a vendor script, so
       # provisioning does not depend on a third-party endpoint being reachable.

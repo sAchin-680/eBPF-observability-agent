@@ -4,23 +4,37 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/sAchin-680/ebpf-observability-agent/internal/correlate"
 	"github.com/sAchin-680/ebpf-observability-agent/internal/ebpf"
+	"github.com/sAchin-680/ebpf-observability-agent/internal/otel"
+	"github.com/sAchin-680/ebpf-observability-agent/internal/proc"
 )
+
+// version identifies the agent build on the telemetry it produces.
+const version = "0.2.0-phase2"
 
 // expireInterval controls how often unanswered requests are swept.
 const expireInterval = 5 * time.Second
 
 func main() {
 	log.SetFlags(log.Ltime)
+
+	otlpEndpoint := flag.String("otlp-endpoint", "localhost:4317",
+		"OTLP gRPC endpoint for traces; empty disables trace export")
+	metricsAddr := flag.String("metrics-addr", ":9464",
+		"address to serve Prometheus metrics on")
+	printRecords := flag.Bool("print", false, "also print each record to stdout")
+	flag.Parse()
 
 	tracer, err := ebpf.NewTracer()
 	if err != nil {
@@ -46,8 +60,42 @@ func main() {
 		cancel()
 	}()
 
+	// Export is optional so the agent stays usable, and debuggable, when no
+	// backend is reachable.
+	var exporter *otel.Exporter
+	if *otlpEndpoint != "" {
+		exporter, err = otel.New(ctx, otel.Config{
+			Endpoint:     *otlpEndpoint,
+			Insecure:     true,
+			MetricsAddr:  *metricsAddr,
+			AgentVersion: version,
+		})
+		if err != nil {
+			log.Fatalf("starting exporters: %v", err)
+		}
+		defer func() {
+			// Bounded, and separate from the main context, which is already
+			// cancelled by the time this runs.
+			flushCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := exporter.Shutdown(flushCtx); err != nil {
+				log.Printf("flushing telemetry: %v", err)
+			}
+		}()
+		log.Printf("exporting traces to %s, metrics on %s", *otlpEndpoint, *metricsAddr)
+	}
+
+	names := newServiceNames()
+
 	// One correlator, driven from the reader, so no locking is needed.
-	corr := correlate.New(correlate.DefaultTTL, printRecord)
+	corr := correlate.New(correlate.DefaultTTL, func(r correlate.Record) {
+		if *printRecords || exporter == nil {
+			printRecord(r)
+		}
+		if exporter != nil {
+			exporter.Record(ctx, r, names.of(int(r.PID), r.Comm))
+		}
+	})
 	corr.SetEndpointResolver(func(pid uint32, conn uint64) (string, string, bool) {
 		t, ok := tracer.LookupTuple(pid, conn)
 		if !ok {
@@ -76,6 +124,9 @@ func main() {
 		log.Printf("reading events: %v", err)
 	}
 
+	if exporter != nil {
+		log.Printf("produced telemetry for %d services", exporter.Services())
+	}
 	st := corr.Stats()
 	log.Printf("requests=%d completed=%d expired=%d unmatched-responses=%d non-http=%d pending=%d",
 		st.Requests, st.Completed, st.Expired, st.ResponsesUnmatched, st.NotHTTP, corr.Pending())
@@ -154,4 +205,46 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
+}
+
+// serviceNames caches inferred names per process.
+//
+// Inference reads several files under /proc, which is far more work than the
+// rest of handling a record. The name cannot change for the lifetime of a
+// process, so it is resolved once.
+//
+// The cache is keyed by pid and is therefore wrong if a pid is reused by an
+// unrelated process. Over an agent's lifetime that is possible; the entry is
+// replaced when the name is resolved for a process the cache has not seen,
+// which a reused pid is not. Correcting it properly needs the process start
+// time as part of the key, which is deferred until it matters.
+type serviceNames struct {
+	mu    sync.Mutex
+	cache map[int]string
+}
+
+func newServiceNames() *serviceNames {
+	return &serviceNames{cache: make(map[int]string)}
+}
+
+func (s *serviceNames) of(pid int, fallback string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if name, ok := s.cache[pid]; ok {
+		return name
+	}
+
+	name := proc.ServiceName(pid)
+	if name == "" || name == "unknown" {
+		// The process has already exited, which is normal for a short-lived
+		// client. Its command name is the best remaining signal.
+		if fallback != "" {
+			name = fallback
+		} else {
+			name = "unknown"
+		}
+	}
+	s.cache[pid] = name
+	return name
 }

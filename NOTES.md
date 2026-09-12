@@ -809,3 +809,94 @@ cannot be done safely on Go. The exposure is bounded — a thread handling a
 keep-alive connection sends only for that connection, and the next TLS call
 overwrites the marker — but it is wrong data rather than missing data, which
 makes it worth recording.
+
+---
+
+## 2026-09-13 — OpenTelemetry export
+
+### The agent traced itself, and did not survive it
+
+**Context:** First run with the OTLP exporter enabled.
+
+**Symptom:** The agent exited five seconds after start, having produced no
+telemetry. Its own startup log showed why:
+
+```
+attached /home/.../bin/agent  (pid 46059, go, 7 return sites)
+attached /bin/prometheus      (go, 7 return sites)
+attached /tempo               (go, 7 return sites)
+attached .../grafana          (go, 7 return sites)
+```
+
+**Cause:** The agent is a Go program that uses crypto/tls, because that is how
+it ships telemetry. It therefore matches its own discovery criteria exactly.
+Every export is a TLS write, which fires the agent's own probes, which produces
+events, which the agent exports. The loop amplifies itself.
+
+It also attached to the three backends it exports to, which would have done the
+same thing one step removed.
+
+**Resolution:** Exclude processes running the agent's own executable, matched by
+device and inode rather than by pid — the agent may have more than one process,
+and a pid says nothing about what is running under it.
+
+**Worth carrying forward:** this was invisible in every earlier phase. The agent
+only became a candidate for its own probes once it started using TLS, so the
+defect was introduced by the feature that exposed it. Anything that observes a
+class of processes has to consider whether it is a member of that class.
+
+Tracing the observability backends is a separate question left open: it is
+correct behaviour in general, and only a problem when the agent exports to them.
+
+### Service name inference, and why the obvious signals fail
+
+**Context:** OpenTelemetry requires a service name, and nothing tells the agent
+what a service is called.
+
+**Why the direct signals are insufficient:** the executable name is the runtime
+for anything interpreted — three Python services all report `python3`. The
+entry-point filename is usually a convention: `app.py`, `server.js`, `main.go`.
+Neither distinguishes one service from another.
+
+**Resolution:** take the most specific non-generic signal available, falling
+back rather than guessing. Where the entry point is itself a conventional name,
+the directory containing it is used, which is what a service is usually named
+after.
+
+```
+service_name="go-api"        from the executable
+service_name="python-flask"  app.py is generic, so the directory
+service_name="node-express"  server.js is generic, so the directory
+```
+
+**Worth carrying forward:** this is a heuristic and will be wrong somewhere. In
+a container or a pod the authoritative answer is a label, and that supersedes
+all of this — which makes this the right amount of effort for now rather than a
+problem to solve completely.
+
+### Both ends of a local call are observed, and counting both is wrong
+
+**Context:** The agent sees curl writing a request and the server reading the
+same request, producing a record for each.
+
+**Resolution:** The direction of the request payload already says which side a
+process was on — a process that read the request is serving it. That maps
+directly onto the span kinds the data model already has, so no new concept was
+needed and a query can separate them.
+
+Without it, every local request appears twice in the request rate.
+
+### A tracer provider describes one service, and the agent is not that service
+
+**Context:** The SDK attaches a resource, including the service name, to a
+provider rather than to a span, because a normal application instruments itself.
+
+**Resolution:** One provider per traced service, all sharing a single exporter
+and connection. Putting the service name on the span instead would be simpler
+but places it where a backend grouping by resource will not find it.
+
+**Result:**
+
+```
+Tempo service.name values: ["curl","go-api","node-express","python-flask"]
+```
