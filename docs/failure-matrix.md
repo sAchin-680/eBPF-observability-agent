@@ -14,10 +14,51 @@ All rows must pass before Phase 3 is considered shipped.
 
 | # | Scenario | Expected behaviour | Verified by | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| 1 | Traced process restarts | Agent detects the restart and re-attaches automatically | Integration test: kill and restart a sample application, assert traces resume | pending |
-| 2 | Sustained high load | Overhead stays within documented bounds; dropped events are logged, never silent | Load test with drop-rate logging assertion | pending |
-| 3 | Agent process crashes | Traced application is completely unaffected | Kill the agent mid-load-test, assert the sample application's latency and error rate are unchanged | pending |
-| 4 | Kernel without BTF or CO-RE support | Agent fails to load with a clear error and does not destabilize the node | Run against a deliberately incompatible kernel image, assert clean failure and node health | pending |
+| 1 | Traced process restarts | Agent detects the restart and re-attaches automatically | [`scripts/failure-matrix.sh restart`](../scripts/failure-matrix.sh) | **pass** |
+| 2 | Sustained high load | Overhead stays within documented bounds; dropped events are logged, never silent | [`scripts/failure-matrix.sh drops`](../scripts/failure-matrix.sh), bounds in [benchmarks](benchmarks/) | **pass** |
+| 3 | Agent process crashes | Traced application is completely unaffected | [`scripts/failure-matrix.sh crash`](../scripts/failure-matrix.sh) | **pass** |
+| 4 | Kernel without BTF or CO-RE support | Agent fails to load with a clear error and does not destabilize the node | Requires a kernel without BTF; belongs with the multi-kernel matrix | pending |
+
+---
+
+## Results
+
+Reproduce with `scripts/failure-matrix.sh`. Each test asserts its own
+preconditions before testing anything, so a pass cannot be produced by a
+condition that was never set up.
+
+**Row 1 — restart.** The service was confirmed traced before the restart, then
+restarted as a genuinely different process, and tracing resumed.
+
+```
+traced before restart: 4 events
+restarting the service (pid 92078)
+restarted as pid 92228
+tracing resumed: 20 events after restart
+```
+
+Asserting the service was traced *first* is what distinguishes re-attachment
+from never having attached at all.
+
+**Row 2 — sustained load.** Loss occurred, was counted, and was logged.
+
+```
+received 477,204 events, dropped 1,702
+```
+
+**Row 3 — agent killed mid-load.** The agent was sent SIGKILL eight seconds into
+a twenty-second run, so it had no opportunity to detach. What is tested is
+whether the kernel's own cleanup suffices.
+
+```
+                     baseline   agent killed
+200 responses           39,987         39,995
+non-200 responses            0              0
+transport errors         false          false
+```
+
+The application completed marginally more requests than the baseline and
+produced no errors of any kind.
 
 ---
 

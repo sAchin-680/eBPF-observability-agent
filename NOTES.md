@@ -986,3 +986,71 @@ reaches 39%. Fewer events are seen because more are discarded before they can
 be. A throughput figure that decreases as offered load increases is the
 signature of a saturated system, and the latency figures at that point describe
 an agent observing three fifths of its traffic.
+
+---
+
+## 2026-09-13 — Failure matrix
+
+### An agent killed mid-load leaves the application untouched
+
+**Context:** NFR3 has been asserted since Phase 1 and never tested. It is also
+the claim with known counter-evidence: an earlier version of this agent
+provably violated it, because a return probe on Go's TLS read aborted the traced
+process outright.
+
+**Method:** SIGKILL, eight seconds into a twenty-second load run, so the agent
+had no opportunity to detach. What is under test is whether the kernel's own
+cleanup suffices, not whether the agent shuts down tidily.
+
+```
+                     baseline   agent killed
+p50 (ms)                1.700          1.000
+p99 (ms)                5.200          4.800
+200 responses          39,987         39,995
+non-200 responses           0              0
+transport errors        false          false
+```
+
+**Result:** the application completed marginally more requests than baseline and
+produced no errors. The probes are released when the file descriptors owning
+them close, which happens whether the process exited or was killed.
+
+**Worth carrying forward:** the latency columns are not evidence of anything
+here — the run with the agent killed spent most of its time on a busier machine,
+which is the same idle-baseline effect the benchmark had to control for. The
+evidence is the response counts and the absence of errors.
+
+### Testing re-attachment requires proving attachment first
+
+**Context:** Row 1 claims the agent re-attaches after a traced process restarts.
+
+**Cause for concern:** a test that restarts a service and then observes events
+proves nothing on its own. It cannot distinguish re-attachment from an agent
+that was tracing the whole time through the library, or from one that never
+attached and is reporting something else entirely.
+
+**Resolution:** the test asserts events were produced before the restart,
+asserts the process id actually changed, and only then looks for events
+afterwards. It fails if the service was never traced, and fails if the restart
+did not happen.
+
+```
+traced before restart: 4 events
+restarting the service (pid 92078)
+restarted as pid 92228
+tracing resumed: 20 events after restart
+```
+
+### Zero drops is a pass, not an inconclusive result
+
+**Context:** Row 2 claims loss is counted rather than silent.
+
+**Reasoning:** the property is that loss is *visible*, not that loss occurs. A
+run that loses nothing and reports zero has demonstrated the counter works as
+well as one that loses events — provided the counter is present in the output.
+Treating a zero as a failure would push the test toward manufacturing loss in
+order to pass, which tests the load generator rather than the agent.
+
+**Resolution:** the test checks the counter exists first, and treats a zero as a
+pass while saying so. The run that produced this result did lose events —
+477,204 received, 1,702 dropped — so both paths are covered.
