@@ -140,11 +140,24 @@ func readComm(pid int) string {
 	return strings.TrimSpace(string(raw))
 }
 
-// stripVersion reduces names like python3.12 to python3, so that a versioned
-// interpreter is still recognised as an interpreter.
+// stripVersion removes a trailing version from an executable name, so that a
+// versioned interpreter is still recognised as an interpreter.
+//
+// Interpreters are installed under their version far more often than not:
+// python3.12, ruby3.2, php8.3. Truncating at the first dot is not enough —
+// ruby3.2 becomes ruby3, which matches nothing — so every trailing digit and
+// dot is removed.
 func stripVersion(name string) string {
-	if i := strings.IndexByte(name, '.'); i > 0 {
-		return name[:i]
+	end := len(name)
+	for end > 0 {
+		c := name[end-1]
+		if (c < '0' || c > '9') && c != '.' {
+			break
+		}
+		end--
 	}
-	return name
+	if end == 0 {
+		return name // entirely digits; not a name this can improve on
+	}
+	return name[:end]
 }
