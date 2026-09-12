@@ -8,7 +8,7 @@ observed. A row whose **Status** is *pending* has expected behaviour specified
 but not demonstrated, and no claim to the contrary is made elsewhere in this
 repository.
 
-All rows must pass before Phase 3 is considered shipped.
+All four rows pass. See the results below.
 
 ---
 
@@ -17,7 +17,7 @@ All rows must pass before Phase 3 is considered shipped.
 | 1 | Traced process restarts | Agent detects the restart and re-attaches automatically | [`scripts/failure-matrix.sh restart`](../scripts/failure-matrix.sh) | **pass** |
 | 2 | Sustained high load | Overhead stays within documented bounds; dropped events are logged, never silent | [`scripts/failure-matrix.sh drops`](../scripts/failure-matrix.sh), bounds in [benchmarks](benchmarks/) | **pass** |
 | 3 | Agent process crashes | Traced application is completely unaffected | [`scripts/failure-matrix.sh crash`](../scripts/failure-matrix.sh) | **pass** |
-| 4 | Kernel without BTF or CO-RE support | Agent fails to load with a clear error and does not destabilize the node | Requires a kernel without BTF; belongs with the multi-kernel matrix | pending |
+| 4 | Kernel without BTF or CO-RE support | Agent fails to load with a clear error and does not destabilize the node | [`scripts/failure-matrix.sh btf`](../scripts/failure-matrix.sh) | **pass** |
 
 ---
 
@@ -45,6 +45,22 @@ from never having attached at all.
 ```
 received 477,204 events, dropped 1,702
 ```
+
+**Row 4 — BTF unreadable.** Tested with a private mount namespace rather than a
+kernel built without BTF: what the agent can observe is identical — the file
+cannot be read — and it does not require maintaining a kernel nobody would
+deploy.
+
+```
+socket endpoints unavailable: ... parsing .BTF header: can't read header: EOF
+loading kernel programs:      ... parsing .BTF header: can't read header: EOF
+```
+
+The error names the cause, the agent exits, nothing is left loaded, and the load
+average is unchanged. Note the order: the socket program degrades first with its
+own message and the agent continues, then the capture programs fail and it does
+not. That is the intended distinction — endpoints are an enrichment, capture is
+the purpose.
 
 **Row 3 — agent killed mid-load.** The agent was sent SIGKILL eight seconds into
 a twenty-second run, so it had no opportunity to detach. What is tested is
