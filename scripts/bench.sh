@@ -129,6 +129,19 @@ dropped_events() {
     awk '/^ebpf_agent_events_dropped_total/ {sum += $2} END {print sum + 0}'
 }
 
+# received_events reads the agent's count of events read from the ring buffers.
+#
+# Reported alongside drops so the agent's limit can be stated per event rather
+# than per request. How many events a request produces depends on the traffic:
+# a large response arrives in several reads, TLS record headers are read
+# separately, and the load generator's own TLS traffic is captured too. A
+# threshold in requests per second describes this test; one in events per second
+# describes the agent.
+received_events() {
+  curl -s --max-time 2 localhost:9464/metrics 2>/dev/null |
+    awk '/^ebpf_agent_events_received_total/ {sum += $2} END {print sum + 0}'
+}
+
 # ---------------------------------------------------------------------------
 # One measurement
 # ---------------------------------------------------------------------------
@@ -203,7 +216,7 @@ sleep 3
   echo "# duration:    ${DURATION}s"
   echo "# connections: $CONNECTIONS"
   echo "# repeats:     $REPEATS"
-  echo "arm,requested_rps,achieved_rps,p50_ms,p95_ms,p99_ms,ok_responses,agent_cpu_s,dropped_events"
+  echo "arm,requested_rps,achieved_rps,p50_ms,p95_ms,p99_ms,ok_responses,agent_cpu_s,dropped_events,received_events,events_per_s"
 } > "$CSV"
 
 bold "Measuring"
@@ -232,19 +245,24 @@ for rate in $RATES; do
       pid="$(agent_pid)"
       cpu_before=$(cpu_ticks "$pid")
       drops_before=$(dropped_events)
+      recv_before=$(received_events)
 
       result=$(run_load "$arm" "$rate" "$rep")
 
       cpu_after=$(cpu_ticks "$pid")
       drops_after=$(dropped_events)
+      recv_after=$(received_events)
 
       ticks=$(( cpu_after - cpu_before ))
       cpu_s=$(python3 -c "print(f'{$ticks / $(getconf CLK_TCK):.2f}')")
       drops=$(( drops_after - drops_before ))
+      recv=$(( recv_after - recv_before ))
+      events_per_s=$(python3 -c "print(f'{$recv / $DURATION:.0f}')")
 
-      echo "$arm,$rate,$result,$cpu_s,$drops" >> "$CSV"
+      echo "$arm,$rate,$result,$cpu_s,$drops,$recv,$events_per_s" >> "$CSV"
       printf "   rep%-2s %-9s %6s req/s  achieved %-8s p50 %-8s p95 %-8s p99 %-8s cpu %-6s drops %s\n" \
         "$rep" "$arm" "$rate" $(echo "$result" | cut -d, -f1-4 | tr ',' ' ') "$cpu_s" "$drops"
+      [ "$arm" = traced ] && printf "        events %s (%s/s)\n" "$recv" "$events_per_s"
 
       case "$arm" in
         traced)  stop_agent ;;
@@ -275,7 +293,8 @@ def med(arm, rate, field):
 rates = sorted({r["requested_rps"] for r in rows}, key=int)
 
 print(f"   {'rps':>6} {'p50 idle':>9} {'p50 ctl':>9} {'p50 agt':>9} {'agt-ctl':>9} "
-      f"{'p99 ctl':>9} {'p99 agt':>9} {'agt-ctl':>9} {'cpu s':>7} {'drops':>7}")
+      f"{'p99 ctl':>9} {'p99 agt':>9} {'agt-ctl':>9} {'cpu s':>7} {'events/s':>9} "
+      f"{'drops':>7} {'loss':>7}")
 for rate in rates:
     p50i = med("untraced", rate, "p50_ms")
     p50c, p50t = med("control", rate, "p50_ms"), med("traced", rate, "p50_ms")
@@ -283,8 +302,13 @@ for rate in rates:
     cpu = med("traced", rate, "agent_cpu_s")
     drops = sum(int(r["dropped_events"]) for r in rows
                 if r["arm"] == "traced" and r["requested_rps"] == rate)
+    eps = med("traced", rate, "events_per_s")
+    recv = sum(int(r["received_events"]) for r in rows
+               if r["arm"] == "traced" and r["requested_rps"] == rate)
+    loss = 100.0 * drops / (drops + recv) if (drops + recv) else 0.0
     print(f"   {rate:>6} {p50i:>9.3f} {p50c:>9.3f} {p50t:>9.3f} {p50t - p50c:>+9.3f} "
-          f"{p99c:>9.3f} {p99t:>9.3f} {p99t - p99c:>+9.3f} {cpu:>7.2f} {drops:>7}")
+          f"{p99c:>9.3f} {p99t:>9.3f} {p99t - p99c:>+9.3f} {cpu:>7.2f} "
+          f"{eps:>9.0f} {drops:>7} {loss:>6.2f}%")
 
 print()
 print("   Latency in milliseconds.")
