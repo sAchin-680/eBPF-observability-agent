@@ -1054,3 +1054,78 @@ order to pass, which tests the load generator rather than the agent.
 **Resolution:** the test checks the counter exists first, and treats a zero as a
 pass while saying so. The run that produced this result did lose events —
 477,204 received, 1,702 dropped — so both paths are covered.
+
+---
+
+## 2026-09-13 — The verifier constraint
+
+### A per-header parse verifies over 32 bytes and not over 64
+
+**Context:** The agent parses HTTP in userspace. Establishing why meant
+attempting the in-kernel version and recording what the verifier said.
+
+**Result:**
+
+```
+scan until the data says to stop        rejected  invalid read from stack    95ms
+scan bounded by a length from userspace rejected  invalid read from stack    22ms
+count line breaks, bounded, 256 bytes   accepted  22 instructions            51ms
+per-header parse, 32 bytes              accepted  76 instructions            45ms
+per-header parse, 64 bytes              rejected  argument list too long    280ms
+per-header parse, 256 bytes             rejected  argument list too long    302ms
+```
+
+**Cause, for each class:**
+
+The unbounded scan is not rejected for being a loop. The verifier unrolled it,
+followed the index to 256, and refused the read that left the buffer — it proves
+memory safety by exploring paths, so it finds the overrun rather than reasoning
+about termination.
+
+Bounding by the caller's length fails identically, because the bound arrives in
+a register: `R6 umax=0x7fffffff`. The verifier knows nothing about it and must
+assume two billion.
+
+With a compile-time bound the program verifies, but only while the work inside
+the loop stays small. `E2BIG` is the verifier exhausting its million-instruction
+budget. The compiler unrolls the loop and the verifier walks every resulting
+path, so cost grows with the bound multiplied by the branching inside it.
+Doubling 32 to 64 is enough.
+
+**Worth carrying forward:** HTTP headers are hundreds of bytes, and a Host
+header alone routinely exceeds the largest buffer this structure verifies over.
+This is not a limit to tune around; it rules out the approach.
+
+### Asking for the verifier log changed the error, and then the machine
+
+**Symptom:** The same program reported two different failures.
+
+```
+                  with log                    without log
+error             invalid argument (EINVAL)   argument list too long (E2BIG)
+time              5.7s                        0.30s
+```
+
+At 64 bytes, retrieving the log did worse than mislead. The loader retries with
+a progressively larger buffer while the log is truncated, and no buffer was ever
+large enough:
+
+```
+Out of memory: Killed process 99292 (verifier.test)
+total-vm: 7,041,392 kB   anon-rss: 5,344,556 kB
+```
+
+5.3 GB resident on a 5.9 GB machine, killed before it could report anything.
+
+**Cause:** Verification takes 280 ms. Only the log is unbounded. While trying to
+retrieve it the specific errno was replaced by a generic one, so the diagnostic
+that would have identified the limit was destroyed by the attempt to read the
+diagnostic.
+
+**Resolution:** The size sweep runs with logging disabled and reports the real
+errno. Logs are captured only for the small programs, where they are both
+readable and correct.
+
+**Worth carrying forward:** the instinct on a verifier rejection is to ask for
+more log. For a program near the complexity limit that is the one thing that
+makes the failure harder to diagnose.

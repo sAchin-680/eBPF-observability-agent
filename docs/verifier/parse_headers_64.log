@@ -1,0 +1,8 @@
+program: parse_headers_64
+attempt: per-header parse over 64 bytes
+outcome: rejected
+kernel:  6.8.0-138-generic
+
+verification took 280ms
+
+load program: argument list too long:
