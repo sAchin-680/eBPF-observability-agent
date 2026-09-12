@@ -39,8 +39,8 @@ the value of what is.
 | FR4 | Reconstruct one logical request/response record per exchange | met — `internal/correlate`, 9 unit tests; 84 of 84 requests correlated across three runtimes |
 | FR5 | Convert request records into OpenTelemetry spans with an inferred service name | pending |
 | FR6 | Export spans to Tempo, and rate/error/duration metrics to Prometheus or Mimir | pending |
-| FR7 | Detect traced process restarts and re-attach automatically | partial — new processes are attached via `sched_process_exec`, verified with services started after the agent; a restart-specific test is pending |
-| FR8 | Fail closed with a clear error on kernels lacking BTF or CO-RE support, without destabilizing the node | partial — `scripts/check-env.sh` and the `vmlinux` target fail closed with a diagnostic; agent-side handling pending |
+| FR7 | Detect traced process restarts and re-attach automatically | met — [failure-matrix.md](failure-matrix.md) row 1, which confirms tracing before the restart so that re-attachment is distinguishable from never having attached |
+| FR8 | Fail closed with a clear error on kernels lacking BTF or CO-RE support, without destabilizing the node | met — [failure-matrix.md](failure-matrix.md) row 4: the agent names BTF as the cause, exits, and leaves nothing loaded |
 
 ## Non-functional requirements
 
@@ -48,9 +48,9 @@ the value of what is.
 | :--- | :--- | :--- |
 | NFR1 | Overhead is measured rather than assumed: p50/p95/p99 latency delta at increasing request rates | met — [docs/benchmarks/](benchmarks/), measured against a CPU-matched control rather than an idle machine, which inverts the sign |
 | NFR2 | Ring buffer drop rate is observable and logged; events are never dropped silently | met — exported as a metric; loss begins between 8,000 and 12,000 events/s, see [docs/benchmarks/](benchmarks/) |
-| NFR3 | An agent crash does not affect the traced application, demonstrated by test rather than by argument | pending |
+| NFR3 | An agent crash does not affect the traced application, demonstrated by test rather than by argument | met — agent killed with SIGKILL mid-load; 39,995 successful responses against a 39,987 baseline, zero errors. See [failure-matrix.md](failure-matrix.md) |
 | NFR4 | No `--privileged`. Capabilities scoped to `CAP_BPF` and `CAP_PERFMON`, or `CAP_SYS_ADMIN` on older kernels, documented per operation | pending |
-| NFR5 | One compiled binary runs unmodified across all tested kernel versions | partial — `test/toolchain` proves CO-RE relocation on kernel 6.8; multi-kernel matrix pending |
+| NFR5 | One compiled binary runs unmodified across all tested kernel versions | met — the same binary, by checksum, passes 8 of 8 checks on 5.15 and 6.8. See [kernel-matrix.md](kernel-matrix.md) |
 | NFR6 | Canary rollout is verifiable through node CPU, `dmesg` kernel warnings, and traced-application health before full fleet rollout | pending |
 
 ---

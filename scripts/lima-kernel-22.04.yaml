@@ -1,0 +1,51 @@
+# A second kernel, for testing that one compiled binary runs on more than one.
+#
+# Ubuntu 22.04 carries kernel 5.15, against 6.8 on the development VM. That
+# spans the changes this agent depends on being insulated from: struct layouts
+# differ, and the internal function the socket probe attaches to has no
+# stability guarantee across the gap.
+#
+# Deliberately minimal. Nothing is built here — the binary is copied from the
+# development VM, because rebuilding would test the toolchain rather than the
+# artifact, and NFR5 is a claim about the artifact.
+
+vmType: "vz"
+rosetta:
+  enabled: false
+
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-arm64.img"
+    arch: "aarch64"
+  - location: "https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-amd64.img"
+    arch: "x86_64"
+
+cpus: 2
+memory: "3GiB"
+disk: "20GiB"
+
+mounts:
+  - location: "~/eBPF-observability-agent"
+    mountPoint: "/workspace"
+    writable: false
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      # Enough to give the agent something to trace and to inspect what it
+      # found. No compiler and no Go: this host must not be able to rebuild the
+      # thing it is testing.
+      apt-get install -y --no-install-recommends \
+        curl python3 python3-pip openssl ca-certificates \
+        linux-tools-common linux-tools-generic
+      ln -sf "$(find /usr/lib/linux-tools* -name bpftool | head -1)" /usr/local/bin/bpftool || true
+
+probes:
+  - description: "kernel exposes BTF"
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      timeout 180s bash -c "until [ -r /sys/kernel/btf/vmlinux ]; do sleep 3; done"

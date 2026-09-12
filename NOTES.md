@@ -986,3 +986,203 @@ reaches 39%. Fewer events are seen because more are discarded before they can
 be. A throughput figure that decreases as offered load increases is the
 signature of a saturated system, and the latency figures at that point describe
 an agent observing three fifths of its traffic.
+
+---
+
+## 2026-09-13 — Failure matrix
+
+### An agent killed mid-load leaves the application untouched
+
+**Context:** NFR3 has been asserted since Phase 1 and never tested. It is also
+the claim with known counter-evidence: an earlier version of this agent
+provably violated it, because a return probe on Go's TLS read aborted the traced
+process outright.
+
+**Method:** SIGKILL, eight seconds into a twenty-second load run, so the agent
+had no opportunity to detach. What is under test is whether the kernel's own
+cleanup suffices, not whether the agent shuts down tidily.
+
+```
+                     baseline   agent killed
+p50 (ms)                1.700          1.000
+p99 (ms)                5.200          4.800
+200 responses          39,987         39,995
+non-200 responses           0              0
+transport errors        false          false
+```
+
+**Result:** the application completed marginally more requests than baseline and
+produced no errors. The probes are released when the file descriptors owning
+them close, which happens whether the process exited or was killed.
+
+**Worth carrying forward:** the latency columns are not evidence of anything
+here — the run with the agent killed spent most of its time on a busier machine,
+which is the same idle-baseline effect the benchmark had to control for. The
+evidence is the response counts and the absence of errors.
+
+### Testing re-attachment requires proving attachment first
+
+**Context:** Row 1 claims the agent re-attaches after a traced process restarts.
+
+**Cause for concern:** a test that restarts a service and then observes events
+proves nothing on its own. It cannot distinguish re-attachment from an agent
+that was tracing the whole time through the library, or from one that never
+attached and is reporting something else entirely.
+
+**Resolution:** the test asserts events were produced before the restart,
+asserts the process id actually changed, and only then looks for events
+afterwards. It fails if the service was never traced, and fails if the restart
+did not happen.
+
+```
+traced before restart: 4 events
+restarting the service (pid 92078)
+restarted as pid 92228
+tracing resumed: 20 events after restart
+```
+
+### Zero drops is a pass, not an inconclusive result
+
+**Context:** Row 2 claims loss is counted rather than silent.
+
+**Reasoning:** the property is that loss is *visible*, not that loss occurs. A
+run that loses nothing and reports zero has demonstrated the counter works as
+well as one that loses events — provided the counter is present in the output.
+Treating a zero as a failure would push the test toward manufacturing loss in
+order to pass, which tests the load generator rather than the agent.
+
+**Resolution:** the test checks the counter exists first, and treats a zero as a
+pass while saying so. The run that produced this result did lose events —
+477,204 received, 1,702 dropped — so both paths are covered.
+
+---
+
+## 2026-09-13 — The verifier constraint
+
+### A per-header parse verifies over 32 bytes and not over 64
+
+**Context:** The agent parses HTTP in userspace. Establishing why meant
+attempting the in-kernel version and recording what the verifier said.
+
+**Result:**
+
+```
+scan until the data says to stop        rejected  invalid read from stack    95ms
+scan bounded by a length from userspace rejected  invalid read from stack    22ms
+count line breaks, bounded, 256 bytes   accepted  22 instructions            51ms
+per-header parse, 32 bytes              accepted  76 instructions            45ms
+per-header parse, 64 bytes              rejected  argument list too long    280ms
+per-header parse, 256 bytes             rejected  argument list too long    302ms
+```
+
+**Cause, for each class:**
+
+The unbounded scan is not rejected for being a loop. The verifier unrolled it,
+followed the index to 256, and refused the read that left the buffer — it proves
+memory safety by exploring paths, so it finds the overrun rather than reasoning
+about termination.
+
+Bounding by the caller's length fails identically, because the bound arrives in
+a register: `R6 umax=0x7fffffff`. The verifier knows nothing about it and must
+assume two billion.
+
+With a compile-time bound the program verifies, but only while the work inside
+the loop stays small. `E2BIG` is the verifier exhausting its million-instruction
+budget. The compiler unrolls the loop and the verifier walks every resulting
+path, so cost grows with the bound multiplied by the branching inside it.
+Doubling 32 to 64 is enough.
+
+**Worth carrying forward:** HTTP headers are hundreds of bytes, and a Host
+header alone routinely exceeds the largest buffer this structure verifies over.
+This is not a limit to tune around; it rules out the approach.
+
+### Asking for the verifier log changed the error, and then the machine
+
+**Symptom:** The same program reported two different failures.
+
+```
+                  with log                    without log
+error             invalid argument (EINVAL)   argument list too long (E2BIG)
+time              5.7s                        0.30s
+```
+
+At 64 bytes, retrieving the log did worse than mislead. The loader retries with
+a progressively larger buffer while the log is truncated, and no buffer was ever
+large enough:
+
+```
+Out of memory: Killed process 99292 (verifier.test)
+total-vm: 7,041,392 kB   anon-rss: 5,344,556 kB
+```
+
+5.3 GB resident on a 5.9 GB machine, killed before it could report anything.
+
+**Cause:** Verification takes 280 ms. Only the log is unbounded. While trying to
+retrieve it the specific errno was replaced by a generic one, so the diagnostic
+that would have identified the limit was destroyed by the attempt to read the
+diagnostic.
+
+**Resolution:** The size sweep runs with logging disabled and reports the real
+errno. Logs are captured only for the small programs, where they are both
+readable and correct.
+
+**Worth carrying forward:** the instinct on a verifier rejection is to ask for
+more log. For a program near the complexity limit that is the one thing that
+makes the failure harder to diagnose.
+
+---
+
+## 2026-09-13 — Kernel compatibility
+
+### One binary, two kernels
+
+```
+binary sha256 fb600b07..., built once on 6.8
+
+check                            5.15.0-190    6.8.0-138
+kernel BTF                       pass          pass
+agent loads, relocations resolve pass          pass
+verifier accepts every program   pass          pass
+probes attach                    pass (2)      pass (6)
+socket endpoint capture          pass          pass
+captures TLS payloads            pass (23)     pass (24)
+reports its own health           pass          pass
+detaches cleanly                 pass          pass
+```
+
+The 5.15 host has no compiler and no Go, and mounts the working tree read only,
+so it cannot rebuild what it is testing. The check reports the binary's checksum
+so that two runs can be shown to have used the same file rather than two builds
+that happened to agree.
+
+**Worth carrying forward:** the socket probe attaches to `tcp_sendmsg`, an
+internal symbol, which ADR-003 records as a deliberate exception. It attached on
+both kernels, so the risk that decision accepted did not materialise across this
+range. That is an observation, not reassurance — the symbol is still unstable and
+the degradation path is still what makes the exception acceptable.
+
+The differing target counts are hosts, not kernels: 5.15 runs fewer Go binaries,
+so there is less to attach to.
+
+### Testing "no BTF" without maintaining a kernel nobody would deploy
+
+**Context:** Failure-matrix row 4 requires a kernel that cannot support CO-RE.
+Both available kernels carry BTF, and building one without it to keep around is
+disproportionate.
+
+**Resolution:** A private mount namespace with `/dev/null` bound over
+`/sys/kernel/btf/vmlinux`. What the agent can observe is identical — the file
+cannot be read — and the host's own BTF is untouched, so no cleanup is needed.
+
+```
+socket endpoints unavailable: ... parsing .BTF header: can't read header: EOF
+loading kernel programs:      ... parsing .BTF header: can't read header: EOF
+```
+
+**Worth carrying forward:** the order of those two lines is the designed
+behaviour. The socket program degrades first and the agent continues; the
+capture programs then fail and it does not. Endpoints are an enrichment, capture
+is the purpose, and the distinction is visible in what is fatal.
+
+The agent exits, leaves nothing loaded, and the load average is unchanged before
+and after.
