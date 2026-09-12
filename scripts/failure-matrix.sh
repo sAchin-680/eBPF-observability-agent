@@ -17,7 +17,10 @@
 #
 #   scripts/failure-matrix.sh [row]
 
-set -uo pipefail
+# No pipefail: pipelines here end in grep -q, which closes the pipe on its first
+# match and leaves the producer to die of SIGPIPE. Under pipefail that status
+# becomes the pipeline's, and the test reports the opposite of what it found.
+set -u
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 export PATH="$PATH:/usr/local/go/bin:$HOME/go/bin"
 
@@ -277,7 +280,7 @@ row_no_btf() {
   fi
 
   # Nothing should be left attached by a load that did not complete.
-  if sudo bpftool prog list 2>/dev/null | grep -q "probe_ssl"; then
+  if [ "$(sudo bpftool prog list 2>/dev/null | grep -c "probe_ssl")" -gt 0 ]; then
     bad "programs remain loaded after a failed start"
     FAILED=1
   else
