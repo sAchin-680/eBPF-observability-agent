@@ -76,9 +76,10 @@ detail.
 
 ## Status
 
-This repository is under active development. The table reflects the actual
-state, not the target state. Capabilities are marked complete only when backed
-by a passing test or a recorded benchmark.
+Phases 1 to 3 are complete. The table reflects the actual state, not the target
+state: a capability is marked complete only when a test, benchmark or recorded
+result demonstrates it, and every entry below links to that evidence through
+[`docs/requirements.md`](docs/requirements.md).
 
 | Capability | Status |
 | :--- | :--- |
@@ -91,13 +92,29 @@ by a passing test or a recorded benchmark.
 | Request and response correlation into single records | Complete |
 | Socket endpoint capture, IPv4 and IPv6 | Complete |
 | Process discovery via `sched_process_exec` | Complete |
-| OpenTelemetry export to Tempo and Prometheus | Not started |
+| OpenTelemetry export to Tempo and Prometheus | Complete |
+| Grafana dashboards, provisioned from version control | Complete |
+| Documented verifier constraint on in-kernel parsing | Complete |
 | Kubernetes DaemonSet deployment | Not started |
 | Measured overhead and ring buffer drop-rate benchmarks | Complete |
 | Multi-kernel validation, one binary on 5.15 and 6.8 | Complete |
 | Failure matrix, all four rows | Complete |
 
 The phase plan is in [`docs/ROADMAP.md`](docs/ROADMAP.md).
+
+### Measured
+
+| | |
+| :--- | :--- |
+| Added latency | +0.65 ms p50 at 1,000 req/s, against a CPU-matched control |
+| Loss threshold | between 8,000 and 12,000 events/s |
+| Kernels | one binary, by checksum, on 5.15 and 6.8 |
+| Failure matrix | four rows of four, each with a test that can fail |
+
+Method and caveats in [`docs/benchmarks/`](docs/benchmarks/). The comparison is
+against a control that burns comparable CPU rather than against an idle machine,
+because an idle machine is slower and comparing against it reverses the sign of
+the result.
 
 ---
 
@@ -227,7 +244,7 @@ the schedule is in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 | [002](docs/adr/002-uprobes-on-tls-entry-points.md) | Capture plaintext at TLS library entry points |
 | [003](docs/adr/003-tracepoints-over-kprobes.md) | Prefer tracepoints, record where a kprobe is unavoidable |
 | [004](docs/adr/004-core-over-bcc.md) | Compile once with CO-RE rather than per host with BCC |
-| 005 | Per-request generated trace IDs, no context propagation |
+| [005](docs/adr/005-generated-trace-ids.md) | Generate a trace ID per request, propagate no context |
 | 006 | `CAP_BPF` + `CAP_PERFMON` rather than `--privileged` |
 | 007 | Canary rollout rather than fleet-wide apply |
 
