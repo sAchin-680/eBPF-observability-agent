@@ -36,6 +36,11 @@ type SelfState struct {
 
 	// AttachedTargets is the number of libraries and executables probed.
 	AttachedTargets int
+
+	// ReceivedEvents is the count of events read from the ring buffers. Read
+	// together with DroppedEvents it gives the loss rate, which is what decides
+	// whether the agent's output can be trusted.
+	ReceivedEvents uint64
 }
 
 // RegisterSelfMetrics arranges for the agent's own state to be reported on each
@@ -51,6 +56,14 @@ func (e *Exporter) RegisterSelfMetrics(read func() SelfState) error {
 	dropped, err := meter.Int64ObservableCounter(
 		"ebpf_agent.events.dropped",
 		metric.WithDescription("Events lost because the ring buffer was full"),
+	)
+	if err != nil {
+		return err
+	}
+
+	received, err := meter.Int64ObservableCounter(
+		"ebpf_agent.events.received",
+		metric.WithDescription("Events read from the ring buffers"),
 	)
 	if err != nil {
 		return err
@@ -87,12 +100,13 @@ func (e *Exporter) RegisterSelfMetrics(read func() SelfState) error {
 				o.ObserveInt64(dropped, int64(n),
 					metric.WithAttributes(attribute.String("source", source)))
 			}
+			o.ObserveInt64(received, int64(s.ReceivedEvents))
 			o.ObserveInt64(pending, int64(s.PendingRequests))
 			o.ObserveInt64(services, int64(e.Services()))
 			o.ObserveInt64(attached, int64(s.AttachedTargets))
 			return nil
 		},
-		dropped, pending, services, attached,
+		dropped, received, pending, services, attached,
 	)
 	return err
 }

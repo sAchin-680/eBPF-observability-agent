@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync/atomic"
 	"time"
 
 	bpf "github.com/cilium/ebpf"
@@ -94,6 +95,8 @@ func (t *Tracer) drain(ctx context.Context, src ringSource, handle func(capture.
 			return fmt.Errorf("reading %s ring buffer: %w", src.name, err)
 		}
 
+		atomic.AddUint64(&t.received, 1)
+
 		ev, err := capture.Decode(rec.RawSample)
 		if err != nil {
 			// A record the agent cannot decode means the kernel-side layout
@@ -135,6 +138,19 @@ func (t *Tracer) reportDrops(ctx context.Context, srcs []ringSource) {
 			}
 		}
 	}
+}
+
+// Received reports how many events have been read from the ring buffers.
+//
+// The pairing with the drop counter is what makes either meaningful. A drop
+// count alone cannot be compared between workloads, because the number of
+// events a request produces depends on how the traffic is shaped: a large
+// response arrives in several reads, and TLS record headers are read
+// separately from the records they describe. Expressing the agent's limit in
+// events per second rather than requests per second makes it a property of the
+// agent instead of a property of the test.
+func (t *Tracer) Received() uint64 {
+	return atomic.LoadUint64(&t.received)
 }
 
 // Attached reports how many distinct libraries and executables are probed.

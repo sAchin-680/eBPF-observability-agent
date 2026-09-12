@@ -46,8 +46,8 @@ the value of what is.
 
 | ID | Requirement | Verified by |
 | :--- | :--- | :--- |
-| NFR1 | Overhead is measured rather than assumed: p50/p95/p99 latency delta at increasing request rates | pending |
-| NFR2 | Ring buffer drop rate is observable and logged; events are never dropped silently | met — counter verified by forcing drops with a reduced buffer |
+| NFR1 | Overhead is measured rather than assumed: p50/p95/p99 latency delta at increasing request rates | met — [docs/benchmarks/](benchmarks/), measured against a CPU-matched control rather than an idle machine, which inverts the sign |
+| NFR2 | Ring buffer drop rate is observable and logged; events are never dropped silently | met — exported as a metric; loss begins between 8,000 and 12,000 events/s, see [docs/benchmarks/](benchmarks/) |
 | NFR3 | An agent crash does not affect the traced application, demonstrated by test rather than by argument | pending |
 | NFR4 | No `--privileged`. Capabilities scoped to `CAP_BPF` and `CAP_PERFMON`, or `CAP_SYS_ADMIN` on older kernels, documented per operation | pending |
 | NFR5 | One compiled binary runs unmodified across all tested kernel versions | partial — `test/toolchain` proves CO-RE relocation on kernel 6.8; multi-kernel matrix pending |
