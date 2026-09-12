@@ -1,0 +1,9 @@
+program: count_headers_bounded
+attempt: scan bounded by the buffer
+outcome: accepted
+kernel:  6.8.0-138-generic
+
+accepted by the verifier
+instructions in program: 22
+verification took: 51ms
+

@@ -99,14 +99,14 @@ adjectives.
 
 | # | Task |
 | :--- | :--- |
-| 1 | Stress in-kernel HTTP header parsing until a verifier constraint is hit; document it as encountered |
-| 2 | Restructure around the constraint |
-| 3 | Load test harness (`k6` or `wrk`) against traced and untraced instances |
-| 4 | Load sweep capturing p50/p95/p99 latency delta, agent CPU, ring buffer drop rate |
-| 5 | Identify the request rate at which drops begin |
+| 1 | Stress in-kernel HTTP header parsing until a verifier constraint is hit; document it as encountered — **done**, [docs/verifier/](verifier/) |
+| 2 | Restructure around the constraint — **done**, parsing is in userspace |
+| 3 | Load test harness against traced and untraced instances — **done**, `scripts/bench.sh` |
+| 4 | Load sweep capturing p50/p95/p99 latency delta, agent CPU, ring buffer drop rate — **done**, [docs/benchmarks/](benchmarks/) |
+| 5 | Identify the rate at which drops begin — **done**, 8,000 to 12,000 events/s |
 | 6 | Provision two to three kernel versions |
 | 7 | Run the same compiled binary against each; record the pass/fail matrix |
-| 8 | Verify every failure-matrix row explicitly |
+| 8 | Verify every failure-matrix row explicitly — rows 1 to 3 **done**, row 4 needs a second kernel |
 
 The verifier constraint must be one actually encountered and reproduced, with
 the rejection log recorded verbatim. The request rate at which drops begin is
