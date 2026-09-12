@@ -1,0 +1,32 @@
+# Single-binary Tempo with local storage. Adequate for a development target;
+# a real deployment would use object storage and separate components.
+
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+
+ingester:
+  # Short windows so a trace is queryable seconds after it is written, rather
+  # than after the minutes a production configuration would wait.
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    block_retention: 1h
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
+
+usage_report:
+  reporting_enabled: false

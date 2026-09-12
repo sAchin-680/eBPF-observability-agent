@@ -1,0 +1,66 @@
+# Local observability stack: traces, metrics, and a place to look at both.
+#
+# Runs beside the agent rather than containing it. The agent needs a real kernel
+# and privileges that a container would complicate; these three are ordinary
+# userspace services it talks to over the network, exactly as it would talk to a
+# cluster-wide backend.
+
+name: ebpf-agent-stack
+
+services:
+  tempo:
+    image: grafana/tempo:2.6.1
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200"   # HTTP API, queried by Grafana
+      - "4317:4317"   # OTLP gRPC, written by the agent
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3200/ready || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  prometheus:
+    image: prom/prometheus:v3.0.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yaml
+      - --storage.tsdb.retention.time=6h
+      # Required for Grafana's exemplar support, which links a latency
+      # measurement to the trace that produced it.
+      - --enable-feature=exemplar-storage
+    volumes:
+      - ./prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    # The agent runs on the host, not in this network, so Prometheus has to
+    # reach back out to scrape it.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    environment:
+      # Anonymous admin access. This stack is a local development target with
+      # no real data in it; a login prompt would only be an obstacle to a demo.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_FEATURE_TOGGLES_ENABLE: traceqlEditor
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      tempo:
+        condition: service_healthy
+
+volumes:
+  tempo-data:
+  prometheus-data:
+  grafana-data:

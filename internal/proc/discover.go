@@ -63,6 +63,9 @@ func FindTLSLibraries() ([]Library, error) {
 		if err != nil {
 			continue // not a process directory
 		}
+		if IsSelf(pid) {
+			continue
+		}
 		found, err := TLSLibrariesForPID(pid)
 		if err != nil {
 			continue // exited, or not permitted

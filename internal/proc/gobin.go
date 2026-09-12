@@ -165,6 +165,9 @@ func FindGoTLSTargets() ([]GoTLSTarget, error) {
 			continue
 		}
 
+		if IsSelf(pid) {
+			continue
+		}
 		t, err := GoTLSTargetForPID(pid)
 		if err != nil || t == nil {
 			continue
@@ -182,6 +185,9 @@ func FindGoTLSTargets() ([]GoTLSTarget, error) {
 // GoTLSTargetForPID inspects one process. It returns nil without error when the
 // process is not a Go binary using crypto/tls, which is the common case.
 func GoTLSTargetForPID(pid int) (*GoTLSTarget, error) {
+	if IsSelf(pid) {
+		return nil, nil
+	}
 	dir := strconv.Itoa(pid)
 
 	// The executable is reached through /proc rather than by its reported
