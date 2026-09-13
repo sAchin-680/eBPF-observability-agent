@@ -1,0 +1,43 @@
+# The stable fleet: every node that is not the canary.
+#
+# PROMOTION HAPPENS HERE. Changing image.tag below and committing it is what
+# rolls a build across the fleet — there is no promote command, and no kubectl.
+# The commit is the change record, the review, and the rollback point.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ebpf-agent-stable
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/sAchin-680/eBPF-observability-agent.git
+    targetRevision: main
+    path: deploy/helm/ebpf-agent
+    helm:
+      releaseName: stable
+      valueFiles:
+        - values-stable.yaml
+      parameters:
+        # The one line a promotion changes.
+        - name: image.tag
+          value: 0.3.1-phase4
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ebpf-observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    # Deliberately no CreateNamespace. The namespace carries the Pod Security
+    # Admission labels that permit the agent's capability set, and a namespace
+    # created implicitly by Argo would not have them — on a cluster enforcing
+    # PSA, every pod this Application schedules would be rejected. It is applied
+    # once from deploy/k8s/00-namespace.yaml.
+    syncOptions:
+      - CreateNamespace=false
+  # A DaemonSet rollout is one node at a time by design (maxUnavailable: 1), so
+  # a large fleet takes longer than Argo's default patience.
+  revisionHistoryLimit: 5

@@ -1,0 +1,45 @@
+# The canary: the labelled node only.
+#
+# A new build is committed here first. It reaches one node, and reaches the rest
+# only after scripts/gate-canary.sh says the node is as healthy as one running
+# the previous build — which is a separate commit to stable.yaml, made by a
+# person who has read the gate output.
+#
+# The gate is deliberately NOT wired into Argo as a sync hook. A hook that
+# passes lets the rollout continue automatically, which sounds like the goal
+# and is not: the decision to expose the whole fleet to a new kernel-side
+# program should be taken by someone who looked at the evidence, and a green
+# check is not the same as having looked.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ebpf-agent-canary
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/sAchin-680/eBPF-observability-agent.git
+    targetRevision: main
+    path: deploy/helm/ebpf-agent
+    helm:
+      releaseName: canary
+      valueFiles:
+        - values-canary.yaml
+      parameters:
+        # A new build goes here first. When this and stable.yaml carry the same
+        # tag, the fleet is converged and the canary node is not running
+        # anything different from everywhere else.
+        - name: image.tag
+          value: 0.3.1-phase4
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ebpf-observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+  revisionHistoryLimit: 5

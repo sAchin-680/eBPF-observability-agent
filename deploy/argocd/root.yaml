@@ -1,0 +1,45 @@
+# The root application: an application whose job is to apply the others.
+#
+# Without it, every Application manifest has to be kubectl-applied by hand, and
+# the thing that decides what runs on the fleet lives outside the system that
+# is supposed to decide what runs on the fleet. With it, the only privileged
+# action a human takes is a git commit.
+#
+# Apply this once:
+#
+#   kubectl apply -f deploy/argocd/root.yaml
+#
+# Everything afterwards — including changes to this file's children — arrives
+# through git.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ebpf-agent-root
+  namespace: argocd
+  # Argo deletes an Application's children when the Application is deleted.
+  # A finalizer makes that ordered rather than abrupt; without it, deleting the
+  # root leaves the agent DaemonSets running with nothing managing them.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/sAchin-680/eBPF-observability-agent.git
+    targetRevision: main
+    path: deploy/argocd/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      # prune: an Application removed from git is removed from the cluster.
+      # Without it, deleting a file leaves what it created running forever, and
+      # the repository stops describing the fleet.
+      prune: true
+      # selfHeal: a change made with kubectl is reverted to what git says.
+      # This is the property that makes the repository the record: an
+      # out-of-band edit during an incident is visible as drift and undone,
+      # rather than silently becoming the real configuration.
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
