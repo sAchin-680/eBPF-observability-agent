@@ -178,3 +178,4 @@ Tagged at the end of each phase, giving fixed points to reference later.
 | `v0.2-phase2` | Observability pipeline complete |
 | `v0.3-phase3` | Benchmarks and failure matrix complete |
 | `v1.0-phase4` | Deployment complete |
+| `v1.0.1` | The same tree plus the release-pipeline fix. `v1.0-phase4` built no image and published no release: the registry rejected the mixed-case account login in the image path |
