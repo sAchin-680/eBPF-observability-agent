@@ -20,8 +20,12 @@ import (
 	"github.com/sAchin-680/ebpf-observability-agent/internal/proc"
 )
 
-// version identifies the agent build on the telemetry it produces.
-const version = "0.2.0-phase2"
+// version identifies the agent build on the telemetry it produces. It is a
+// var, not a const, because release builds overwrite it with the tag through
+// -ldflags -X; the linker cannot write to a const, and does not say so — it
+// simply leaves the value alone, which is how this stayed at a Phase 2 string
+// through two tagged releases.
+var version = "dev"
 
 // expireInterval controls how often unanswered requests are swept.
 const expireInterval = 5 * time.Second
