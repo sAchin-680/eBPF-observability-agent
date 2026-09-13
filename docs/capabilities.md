@@ -92,12 +92,17 @@ a mitigation and should not be relaxed in its place.
 direct about that rather than presenting the capability list as if it were a
 meaningful reduction in the common case.
 
-**It is still not `--privileged`, and the difference is real.** `--privileged`
-grants every capability, disables seccomp and AppArmor confinement, and gives
-access to all host devices. The set here grants four capabilities and leaves
-confinement in place. A compromised agent under this set can trace and read
-process memory; under `--privileged` it can load kernel modules and write to any
-device.
+**It is still not `--privileged`, but the gap is narrower than capabilities
+alone suggest.** Measured in a container afterwards: the agent must also run
+with AppArmor unconfined, because the runtime's default profile permits
+`ptrace` and `/proc` access only against peers under the same profile, and
+under it the agent silently traces containers and not the host. So one of the
+two confinements `--privileged` disables has to be given up anyway. What is
+kept: seccomp filtering, device isolation, and an enumerated capability set
+rather than all of them. A compromised agent under this set can trace and read
+process memory; under `--privileged` it can additionally load kernel modules
+and write to any device. See
+[`deploy/k8s/README.md`](../deploy/k8s/README.md) for that experiment.
 
 **The blast radius is unchanged by any of this.** An agent that can attach
 uprobes can read plaintext for every process on the node. That is what the agent
@@ -113,6 +118,10 @@ process — not the privilege it holds.
 securityContext:
   privileged: false
   runAsNonRoot: false          # /proc/<pid>/root traversal needs uid 0
+  appArmorProfile:
+    type: Unconfined           # the default profile silently halves coverage
+  seccompProfile:
+    type: RuntimeDefault       # measured to cost nothing, so it stays
   capabilities:
     drop: ["ALL"]
     add:

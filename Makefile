@@ -92,6 +92,21 @@ build: generate ## Build the agent binary
 	@CGO_ENABLED=0 $(GO) build -o bin/agent ./cmd/agent
 	@echo ">> bin/agent"
 
+# ---------------------------------------------------------------------------
+# Container image
+# ---------------------------------------------------------------------------
+IMAGE   ?= ghcr.io/sachin-680/ebpf-observability-agent
+TAG     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
+# Depends on vmlinux.h because a container build cannot read a kernel's BTF:
+# there is no /sys to read it from. It is rendered here and shipped in the
+# build context. CO-RE means the kernel that supplies it need not match the
+# kernel that runs the agent (ADR-004).
+.PHONY: image
+image: $(VMLINUX) ## Build the agent container image
+	@docker build --build-arg VERSION=$(TAG) -t $(IMAGE):$(TAG) -t $(IMAGE):latest .
+	@echo ">> $(IMAGE):$(TAG)"
+
 .PHONY: verify
 verify: ## Fast check: build, format, vet, and every test that needs no load (~60s)
 	@bash scripts/verify.sh

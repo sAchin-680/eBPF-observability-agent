@@ -1,0 +1,239 @@
+# The agent, one pod per node.
+#
+# Numeric filename prefixes are load-bearing: `kubectl apply -f deploy/k8s/`
+# applies files in lexical order, and without them the DaemonSet is submitted
+# before the namespace it lives in exists.
+#
+# Raw manifests, kept alongside the Helm chart rather than replaced by it. The
+# chart in deploy/helm/ renders to this; having the plain form in the repository
+# means the deployment can be read without running a templating engine, and
+# `helm template` can be diffed against it.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ebpf-agent
+  namespace: ebpf-observability
+  labels:
+    app.kubernetes.io/name: ebpf-observability-agent
+# The agent never calls the Kubernetes API. It has no RBAC rules and no reason
+# to hold a token; mounting one would give a process with CAP_SYS_ADMIN a
+# credential it has no use for.
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ebpf-agent-metrics
+  namespace: ebpf-observability
+  labels:
+    app.kubernetes.io/name: ebpf-observability-agent
+spec:
+  # Headless: Prometheus scrapes each pod, and a load-balanced VIP across
+  # per-node agents would return one node's metrics at random.
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: ebpf-observability-agent
+  ports:
+    - name: metrics
+      port: 9464
+      targetPort: metrics
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ebpf-agent
+  namespace: ebpf-observability
+  labels:
+    app.kubernetes.io/name: ebpf-observability-agent
+    app.kubernetes.io/component: agent
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ebpf-observability-agent
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # One node at a time. A bad agent build can affect the node it runs on,
+      # so the update strategy is part of the blast-radius control, not a
+      # throughput setting.
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ebpf-observability-agent
+        app.kubernetes.io/component: agent
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9464"
+        prometheus.io/path: /metrics
+        # The pre-1.30 spelling of securityContext.appArmorProfile below.
+        # Both are set: the annotation is ignored by newer API servers and the
+        # field is ignored by older ones, and the consequence of the wrong one
+        # taking effect is silent under-coverage rather than a failure.
+        container.apparmor.security.beta.kubernetes.io/agent: unconfined
+    spec:
+      serviceAccountName: ebpf-agent
+      automountServiceAccountToken: false
+
+      # The agent resolves targets through /proc: it reads each process's
+      # mapped libraries to find libssl, and reaches into container filesystems
+      # through /proc/<pid>/root. Without the host PID namespace it sees only
+      # itself and traces nothing.
+      hostPID: true
+
+      # Deliberately NOT hostNetwork. The agent opens one listening port, for
+      # metrics, and putting that on the host's network namespace would collide
+      # with anything already using 9464 on the node for no gain. Traces leave
+      # over OTLP, which is an outbound connection.
+      hostNetwork: false
+      dnsPolicy: ClusterFirst
+
+      # Evicting the agent to make room for a workload pod would silently stop
+      # tracing that node. Tracing is not more important than the workload, but
+      # a node that quietly stops being observed is the failure this project is
+      # about.
+      priorityClassName: system-node-critical
+
+      # Every node, including tainted ones. A control-plane node excluded from
+      # tracing is an observability gap that looks identical to "nothing is
+      # happening there".
+      tolerations:
+        - operator: Exists
+
+      # Long enough for the agent to detach its probes and flush pending spans
+      # (its shutdown path allows 10s for the flush).
+      terminationGracePeriodSeconds: 30
+
+      securityContext:
+        # Measured, not assumed. Under the runtime's default AppArmor profile
+        # the agent starts, reports no error, and traces 3 of 7 processes: the
+        # profile permits ptrace and /proc access only against peers running
+        # the same profile, so it sees other containers and is blind to
+        # everything on the host. Coverage silently drops; nothing fails.
+        #
+        # This is the one confinement that has to go, and it narrows the gap to
+        # `privileged: true` more than the capability list alone suggests.
+        # seccomp and device isolation stay, which is the remaining difference.
+        appArmorProfile:
+          type: Unconfined
+        # Kept, and kept deliberately: tested with seccomp unconfined, the
+        # agent behaves identically, so the default profile costs nothing. The
+        # bpf() and perf_event_open() calls it would otherwise filter are
+        # permitted because the container holds CAP_SYS_ADMIN.
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: agent
+          image: ghcr.io/sachin-680/ebpf-observability-agent:0.2.0-phase2
+          imagePullPolicy: IfNotPresent
+          args:
+            - --otlp-endpoint=$(OTLP_ENDPOINT)
+            - --metrics-addr=:9464
+          env:
+            - name: OTLP_ENDPOINT
+              value: tempo.observability.svc.cluster.local:4317
+            # Reported on every span as a resource attribute, so a trace can be
+            # attributed to the node that captured it.
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+
+          ports:
+            - name: metrics
+              containerPort: 9464
+              protocol: TCP
+
+          # The measured set, from docs/capabilities.md and ADR-006. NFR4
+          # originally called for CAP_BPF and CAP_PERFMON alone; that pair
+          # cannot start the agent, and the requirement was corrected rather
+          # than restated.
+          #
+          # CAP_SYS_ADMIN is close to root and is stated as such. What this is
+          # still not is `privileged: true`, which additionally disables seccomp
+          # and AppArmor confinement and exposes every host device.
+          securityContext:
+            privileged: false
+            # uid 0 is required: traversing /proc/<pid>/root into another
+            # container's filesystem is not reachable by an unprivileged uid
+            # even with CAP_DAC_READ_SEARCH.
+            runAsUser: 0
+            runAsNonRoot: false
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: true  # required for file capabilities to apply
+            capabilities:
+              drop: ["ALL"]
+              add:
+                - BPF                 # load programs, create maps
+                - PERFMON             # perf subsystem; see ADR-006 on why it is kept
+                - SYS_ADMIN           # attach uprobes via perf_event_open
+                - SYS_PTRACE          # read other processes' /proc entries
+                - DAC_READ_SEARCH     # read /proc/self/mem and files via /proc/<pid>/root
+
+          # Liveness only, and it means "the process is serving", not "the agent
+          # is capturing". Readiness gated on attached targets would be wrong:
+          # a node running no TLS workload legitimately has zero targets, and a
+          # probe that fails there would evict the agent from exactly the nodes
+          # where a workload is about to start. Attach counts and drop rates
+          # belong on the self-health dashboard, where zero can be read in
+          # context.
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            failureThreshold: 3
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              # No CPU limit. Throttling the agent under a traffic spike makes
+              # it drop ring buffer events, which is the one failure that
+              # corrupts the telemetry rather than merely delaying it. The
+              # memory limit stays: an agent leaking memory should be killed,
+              # not allowed to pressure the node it is meant to observe.
+              memory: 512Mi
+
+          volumeMounts:
+            - name: tracefs
+              mountPath: /sys/kernel/tracing
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+
+      # One hostPath, read-only. The original plan called for two; what each is
+      # actually for was established by removing it and watching what broke.
+      #
+      #   /sys/kernel/tracing — REQUIRED, and not for the reason expected. It is
+      #     not the uprobe attach path: both supported kernels expose the uprobe
+      #     PMU (/sys/bus/event_source/devices/uprobe, type 9 on 6.8 and 7 on
+      #     5.15), so uprobes go through perf_event_open. It is the
+      #     sched_process_exec *tracepoint*, whose numeric id is readable only
+      #     from tracefs. Without it the agent fails at startup with "neither
+      #     debugfs nor tracefs are mounted" — a clear failure, which is the
+      #     good case. Read-only is enough: the id is read, never written.
+      #
+      #   /sys/fs/bpf — NOT mounted. It exists for pinning programs and maps so
+      #     they outlive the process. The agent pins nothing: its probes are
+      #     torn down with it by design, so a crashed agent leaves no kernel
+      #     state behind. Mounting it into a container holding CAP_SYS_ADMIN
+      #     with nothing to write there is not a neutral default.
+      #
+      # /sys is mounted read-only by the container runtime, which is where the
+      # BTF that CO-RE relocations need (/sys/kernel/btf/vmlinux) is read from.
+      # hostPID supplies /proc. Neither needs a volume.
+      volumes:
+        - name: tracefs
+          hostPath:
+            path: /sys/kernel/tracing
+            type: Directory
+        # readOnlyRootFilesystem leaves the process no writable path; this is
+        # the only one it gets.
+        - name: tmp
+          emptyDir: {}
