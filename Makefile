@@ -107,6 +107,11 @@ image: $(VMLINUX) ## Build the agent container image
 	@docker build --build-arg VERSION=$(TAG) -t $(IMAGE):$(TAG) -t $(IMAGE):latest .
 	@echo ">> $(IMAGE):$(TAG)"
 
+# Needs a cluster with both releases installed; see deploy/helm/ebpf-agent.
+.PHONY: gate-canary
+gate-canary: ## Decide whether the canary is safe to promote
+	@bash scripts/gate-canary.sh
+
 .PHONY: verify
 verify: ## Fast check: build, format, vet, and every test that needs no load (~60s)
 	@bash scripts/verify.sh
