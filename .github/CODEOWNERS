@@ -1,0 +1,18 @@
+# Review is required for everything, and specifically for the areas where a
+# mistake is expensive and quiet.
+
+*                       @sAchin-680
+
+# Kernel-side code. A change here runs in the kernel on every node; the verifier
+# catches memory safety and nothing else.
+/bpf/                   @sAchin-680
+/internal/ebpf/         @sAchin-680
+
+# Privilege. The capability set is the outcome of a measurement (ADR-006), and
+# widening it should never happen as a side effect of unrelated work.
+/deploy/                @sAchin-680
+
+# The gates themselves. A weakened check is worse than a missing one, because it
+# still reports green.
+/.github/               @sAchin-680
+/scripts/               @sAchin-680

@@ -1,0 +1,76 @@
+name: security
+
+# An agent that runs on every node with CAP_SYS_ADMIN and reads other
+# processes' memory is worth scanning more carefully than an ordinary Go
+# service. A vulnerable dependency here is not a vulnerable web handler; it is a
+# vulnerable process holding kernel privilege on the whole fleet.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, because a dependency does not have to change to become
+    # vulnerable — the advisory database does.
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    name: known vulnerabilities
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/bpf-toolchain
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          # Reports only vulnerabilities in code paths actually reachable from
+          # this binary, so the output stays worth reading rather than becoming
+          # a list to ignore.
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
+  secrets:
+    name: secret scanning
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: a key committed and then removed is still a leaked
+          # key, and scanning only the tip would miss it.
+          fetch-depth: 0
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  manifests:
+    name: deployment manifests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The privilege set has not quietly grown
+        run: |
+          # The capability set is the outcome of a measurement (ADR-006), not a
+          # preference, and it is the single most security-relevant thing in
+          # this repository. This fails if anything grants more than was
+          # established, so that widening it has to be a deliberate edit here
+          # rather than a line added to a manifest during unrelated work.
+          for f in deploy/k8s/10-daemonset.yaml deploy/helm/ebpf-agent/templates/daemonset.yaml; do
+            echo "checking $f"
+            grep -q 'privileged: false' "$f" || { echo "  privileged is not explicitly false"; exit 1; }
+            grep -q 'drop: \["ALL"\]' "$f"   || { echo "  capabilities are not dropped first"; exit 1; }
+            if grep -qE '^\s+-\s+(SYS_MODULE|SYS_RAWIO|SYS_BOOT|NET_ADMIN|SYS_CHROOT)\b' "$f"; then
+              echo "  grants a capability outside the measured set"; exit 1
+            fi
+            grep -q 'hostNetwork: false' "$f" || { echo "  hostNetwork is not explicitly false"; exit 1; }
+            grep -q 'readOnlyRootFilesystem: true' "$f" || { echo "  root filesystem is writable"; exit 1; }
+            grep -q 'automountServiceAccountToken: false' "$f" || { echo "  mounts an API token it has no use for"; exit 1; }
+          done
+          echo "privilege set matches ADR-006"

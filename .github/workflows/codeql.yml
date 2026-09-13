@@ -1,0 +1,39 @@
+name: codeql
+
+# CodeQL on the Go side. The C here is eBPF and is not analysable by CodeQL
+# (there is no CodeQL extractor for a BPF target, and the verifier is a stricter
+# analyser than anything CodeQL would apply anyway) — so this covers userspace,
+# which is where the parsing, correlation and export live.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 5 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: analyze go
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/bpf-toolchain
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: go
+          queries: security-and-quality
+
+      - name: Build
+        # An explicit build, because autobuild would run `go build ./...`
+        # without the generated bindings and fail on missing symbols.
+        run: go build ./...
+
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:go"
