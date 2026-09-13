@@ -49,6 +49,25 @@ if ! sudo -n true 2>/dev/null; then
 fi
 samples() { make -C "$REPO/samples" "$@"; }
 
+# show runs a samples target and prints its output indented.
+#
+# Deliberately not a pipeline. `samples run` leaves services running in the
+# background, and although each has its output redirected to a file, something
+# in the chain keeps the pipe's write end open — so a reader on the other end
+# never sees EOF and the pipeline never finishes. The script then hangs at step
+# 4, and whatever eventually kills it fires the EXIT trap, which stops the
+# agent. The visible symptom is an agent that traced almost nothing, which
+# points nowhere near the cause.
+#
+# Redirecting to a file and printing it afterwards has no reader to block.
+show() {
+  local out
+  out=$(mktemp)
+  samples "$@" > "$out" 2>&1
+  grep -vE "^make(\[|:)" "$out" | sed 's/^/   /'
+  rm -f "$out"
+}
+
 # The agent's log lives in the working tree, not /tmp. A shared temp directory
 # accumulates files owned by whichever user last ran the demo, and the next run
 # then cannot write its own log — while still finding the previous one to read.
@@ -123,15 +142,23 @@ pause 5
 bold "3. Start the agent — before the services exist"
 dim "   Nothing is running to trace yet. The agent attaches to processes as"
 dim "   they start, so it does not need to be restarted when they do."
-samples stop 2>&1 | grep -vE "^make(\[|:)" | sed 's/^/   /'
+show stop
 sudo pkill -f bin/agent >/dev/null 2>&1
 sleep 1
 
-# Detached from this shell's session. Under a terminal recorder the session
-# receives signals the agent would otherwise catch, and it exits partway
-# through the run — after printing a startup line, so the failure looks like
-# an agent that traced nothing rather than one that was killed.
-sudo setsid ./bin/agent > "$AGENT_LOG" 2>&1 < /dev/null &
+# setsid before sudo, not after.
+#
+# With `sudo setsid`, sudo itself stays in this script's process group and
+# forwards signals sent to that group down to the agent. A later step then kills
+# the agent without meaning to, and the failure looks like an agent that traced
+# nothing rather than one that was terminated — the log ends with a clean
+# "detaching" either way. Putting setsid first moves the whole chain into its
+# own session, where group signals do not reach it.
+# --print because this demonstration shows the records themselves. Without it
+# the agent prints nothing when a trace backend is reachable, on the grounds
+# that the records are going somewhere better — which is right for running it,
+# and leaves this step blank.
+setsid sudo ./bin/agent --print > "$AGENT_LOG" 2>&1 < /dev/null &
 sleep 5
 echo
 grep -E "tracing .* at startup" "$AGENT_LOG" | sed 's/^/   /'
@@ -139,7 +166,7 @@ pause 3
 
 # ---------------------------------------------------------------------------
 bold "4. Start the services"
-samples run 2>&1 | grep -vE "^make(\[|:)" | sed 's/^/   /'
+show run
 sleep 3
 echo
 dim "   Attachments made after the agent was already running:"
@@ -150,7 +177,7 @@ pause 4
 bold "5. Send traffic"
 dim "   Six routes per service, including a deliberate 404, a 500, and an"
 dim "   endpoint that sleeps for 150ms."
-samples traffic 2>&1 | grep -vE "^make(\[|:)" | sed 's/^/   /'
+show traffic
 sleep 3
 
 # ---------------------------------------------------------------------------

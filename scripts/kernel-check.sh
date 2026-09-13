@@ -49,7 +49,7 @@ fi
 # offsets, and loading resolves them against this kernel's own type information.
 # A struct whose layout differs is handled here or not at all.
 sudo pkill -x agent 2>/dev/null; sleep 1
-sudo setsid "$AGENT" --otlp-endpoint="" --metrics-addr=:9464 > "$LOG" 2>&1 < /dev/null &
+setsid sudo "$AGENT" --otlp-endpoint="" --metrics-addr=:9464 > "$LOG" 2>&1 < /dev/null &
 sleep 8
 
 if ! pgrep -x agent >/dev/null; then

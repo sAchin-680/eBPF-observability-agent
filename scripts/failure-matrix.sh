@@ -40,7 +40,7 @@ FAILED=0
 agent_pid() { pgrep -x agent | head -1; }
 
 start_agent() {
-  sudo setsid ./bin/agent --otlp-endpoint="" --metrics-addr=:9464 \
+  setsid sudo ./bin/agent --otlp-endpoint="" --metrics-addr=:9464 \
     > "$AGENT_LOG" 2>&1 < /dev/null &
   for _ in $(seq 1 30); do
     if [ -n "$(agent_pid)" ]; then sleep 4; return 0; fi
