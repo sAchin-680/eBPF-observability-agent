@@ -20,7 +20,7 @@ capture across three language runtimes.
 
 - [x] Agent traces three unmodified sample applications
 - [x] Data-path diagram committed — [data-path.md](data-path.md)
-- [ ] Recording of an empty source diff alongside live traces — `scripts/demo.sh` runs; the recording has not been captured
+
 
 **Tasks**
 
@@ -36,7 +36,7 @@ capture across three language runtimes.
 | 8 | Correlation logic: payload event plus socket event into a request record | Complete — `internal/correlate/` |
 | 9 | Three sample applications (Go, Flask, Express) over HTTP and HTTPS | Complete — `samples/`, four services |
 | 10 | Agent startup: `/proc` scan plus `sched_process_exec` for new processes | Complete — `bpf/discover.bpf.c` |
-| 11 | Demo recording: empty diff and live traces | Script ready, not recorded |
+| 11 | Demo recording: empty diff and live traces | Dropped — `scripts/demo.sh` is the deliverable; see the note above |
 | 12 | Data-path diagram | Complete — [data-path.md](data-path.md) |
 
 **Build order.** Tasks are listed by dependency, not by execution order. One
@@ -132,7 +132,7 @@ privileged node-level agent.
 
 | # | Task | State |
 | :--- | :--- | :--- |
-| 1 | Terraform modules for a multi-node test fleet | Not started |
+| 1 | Terraform modules for a multi-node test fleet | Complete — `deploy/terraform/`, applied and destroyed; kind rather than cloud, with the reasoning recorded |
 | 2 | DaemonSet manifest: `hostPID`, hostPath mounts for `/sys/kernel/debug` and `/sys/fs/bpf` | Complete — `deploy/k8s/`, with one read-only tracefs mount rather than two; `/sys/fs/bpf` is not needed and the reason debugfs is, is the exec tracepoint rather than uprobes |
 | 3 | Scope and document capabilities, with the older-kernel fallback | Complete — [capabilities.md](capabilities.md), NFR4 corrected |
 | 4 | Helm chart | Complete — `deploy/helm/ebpf-agent`, with a drift check against `deploy/k8s/` in `make verify` |
