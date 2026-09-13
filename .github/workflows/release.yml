@@ -47,9 +47,9 @@ jobs:
 
       - name: Verify on kernel ${{ matrix.kernel }}
         run: |
-          docker create --name k "ghcr.io/cilium/ci-kernels:${{ matrix.kernel }}" true >/dev/null
-          docker cp k:/boot/vmlinuz ./vmlinuz
-          docker rm k >/dev/null
+          docker create --name ci-kernel "ghcr.io/cilium/ci-kernels:${{ matrix.kernel }}" true >/dev/null
+          docker cp ci-kernel:/boot/vmlinuz ./vmlinuz
+          docker rm ci-kernel >/dev/null
           chmod +x dist/agent dist/*.test scripts/ci/kernel-smoke.sh
           vng --run ./vmlinuz --user root --verbose \
               --exec "cd $PWD && ./scripts/ci/kernel-smoke.sh dist" | tee smoke.log
