@@ -99,6 +99,7 @@ result demonstrates it, and every entry below links to that evidence through
 | Canary rollout, gated on node and application health | Complete |
 | Agent self-health dashboard, provisioned from version control | Complete |
 | GitOps: fleet promotion by commit, via ArgoCD | Complete |
+| Terraform-provisioned test fleet | Complete |
 | Measured overhead and ring buffer drop-rate benchmarks | Complete |
 | Multi-kernel validation, one binary on 5.15 and 6.8 | Complete |
 | CI: one build, verified on three kernels in QEMU | Complete |
@@ -228,7 +229,8 @@ deploy/
   compose/              local stack: Tempo, Prometheus, Grafana
   k8s/                  DaemonSet manifests, applied as-is
   helm/                 the same DaemonSet as a chart, with canary overlays
-  terraform/            multi-node test fleet provisioning
+  terraform/            the test fleet: cluster, nodes, canary labels
+  argocd/               Applications; promotion is a commit
 docs/
   adr/                  architecture decision records
   benchmarks/           raw overhead and load-test results
@@ -289,6 +291,24 @@ A compromised agent holding these capabilities could observe plaintext traffic
 across the entire node. The exact capability set, the operation each one
 enables, and the full threat model are documented alongside the deployment
 manifests in Phase 4.
+
+---
+
+## Releases
+
+Tagged at the end of each phase, so a result can be attributed to the code that
+produced it rather than to whatever `main` happens to be.
+
+| Tag | Marks |
+| :--- | :--- |
+| `v0.1-phase1` | Core tracing: kernel-to-userspace data path, three runtimes |
+| `v0.2-phase2` | Observability pipeline: OpenTelemetry export, dashboards, zero-config acceptance |
+| `v0.3-phase3` | Benchmarks, verifier constraints, kernel matrix, failure matrix |
+| `v1.0-phase4` | Deployment: DaemonSet, Helm, canary rollout, GitOps, CI kernel matrix |
+
+Tag order follows when each phase's work landed, not the numbering: the Phase 1
+demo script merged after Phase 2 was already complete, so `v0.2-phase2` is an
+ancestor of `v0.1-phase1`.
 
 ---
 

@@ -34,3 +34,10 @@ samples/go-api/go-api
 samples/python-flask/.venv/
 samples/node-express/node_modules/
 samples/node-express/package-lock.json
+
+# Terraform: local state and provider binaries. State describes one person's
+# machine; the configuration is what is shared.
+deploy/terraform/.terraform/
+deploy/terraform/*.tfstate
+deploy/terraform/*.tfstate.*
+deploy/terraform/*.tfplan
