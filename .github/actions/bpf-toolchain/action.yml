@@ -17,13 +17,14 @@ runs:
   steps:
     - uses: actions/setup-go@v5
       with:
-        go-version-file: go.mod
-        # The latest patch of the minor version go.mod asks for, not that exact
-        # patch. govulncheck reports standard-library vulnerabilities against
-        # the toolchain that did the build, and go.mod names a minor version —
-        # pinning to its .0 release means every stdlib fix since then is missing
-        # from the binary and correctly reported as a vulnerability.
-        check-latest: true
+        # Deliberately not go-version-file. go.mod records an exact patch
+        # (go 1.25.0) as the language version, and building with that exact
+        # toolchain means every standard-library fix released since is absent
+        # from the binary — govulncheck reports those, correctly, as
+        # vulnerabilities in crypto/tls and crypto/x509, which this agent links
+        # because it exports over TLS. "stable" is the current release, which is
+        # what a build of this should use.
+        go-version: stable
         cache: true
 
     - name: Install clang and bpftool

@@ -1,6 +1,6 @@
 module github.com/sAchin-680/ebpf-observability-agent
 
-go 1.25
+go 1.25.0
 
 require (
 	github.com/cilium/ebpf v0.22.0
