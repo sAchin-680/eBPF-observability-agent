@@ -86,7 +86,11 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | \
             docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           version="${GITHUB_REF_NAME:-${{ inputs.tag }}}"
-          image="ghcr.io/${{ github.repository_owner }}/ebpf-observability-agent"
+          # Lowercased because an OCI repository name must be, and this
+          # account's login is not. The tag reads fine to a human and is
+          # rejected by the registry, which is a slow thing to find out at
+          # push time: it took the v1.0-phase4 release with it.
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/ebpf-observability-agent"
           docker build --build-arg "VERSION=${version}" \
             -t "${image}:${version}" -t "${image}:latest" .
           docker push "${image}:${version}"

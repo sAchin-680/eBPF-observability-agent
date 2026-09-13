@@ -65,7 +65,7 @@ RUN go generate ./internal/...
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build \
       -trimpath \
-      -ldflags "-s -w" \
+      -ldflags "-s -w -X main.version=${VERSION}" \
       -o /out/agent ./cmd/agent
 
 # ---------------------------------------------------------------------------
@@ -79,6 +79,11 @@ RUN CGO_ENABLED=0 go build \
 FROM gcr.io/distroless/static-debian12
 
 COPY --from=builder /out/agent /agent
+
+# Links the image to the repository on GHCR. Without it the package is not
+# associated with the repo, so it does not inherit the repo's visibility and
+# has to be made public by hand after the first push.
+LABEL org.opencontainers.image.source=https://github.com/sAchin-680/ebpf-observability-agent
 
 # Metrics. Traces leave over OTLP and open no port.
 EXPOSE 9464
