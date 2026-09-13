@@ -1,0 +1,110 @@
+# Defaults for the ebpf-agent chart.
+#
+# The values that exist are the ones a rollout actually varies: which build runs
+# where, where telemetry goes, and how much of the fleet is affected at once.
+# The privilege settings are deliberately NOT parameterised — see securityContext
+# at the bottom of this file.
+
+image:
+  repository: ghcr.io/sachin-680/ebpf-observability-agent
+  # Empty means the chart's appVersion. Overriding this is how a canary runs a
+  # different build from the rest of the fleet.
+  tag: ""
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+# Where traces go. Metrics are always served locally for scraping; this is the
+# OTLP gRPC address for spans. Empty disables trace export and leaves metrics
+# running, which is what a node with an unreachable backend should do rather
+# than falling silent entirely.
+otlpEndpoint: tempo.observability.svc.cluster.local:4317
+
+metrics:
+  port: 9464
+  # Scrape annotations on the pod. A ServiceMonitor is not rendered here: it
+  # requires the Prometheus operator's CRD, and a chart that fails to install
+  # because a CRD is absent is worse than one that needs two lines of scrape
+  # config.
+  annotations: true
+
+# Rollout scope.
+#
+# A canary is this same chart installed again under a different release name,
+# with a nodeSelector that matches a subset of nodes and, usually, a different
+# image tag. The two releases are otherwise identical, which is the point: what
+# is being tested is the build, not the configuration.
+nodeSelector: {}
+
+# Every node by default, tainted ones included. A control-plane node excluded
+# from tracing is an observability gap that looks exactly like a quiet node.
+tolerations:
+  - operator: Exists
+
+affinity: {}
+
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    # One node at a time. A bad agent build can affect the node it runs on, so
+    # this is blast-radius control rather than a throughput setting.
+    maxUnavailable: 1
+
+# Evicting the agent to make room for a workload pod silently stops tracing on
+# that node.
+priorityClassName: system-node-critical
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    # No CPU limit by default. Throttling the agent during a traffic spike makes
+    # it drop ring buffer events, which corrupts the telemetry rather than
+    # merely delaying it. The memory limit stays: a leaking agent should be
+    # killed, not left to pressure the node it exists to observe.
+    memory: 512Mi
+
+# The namespace is NOT rendered by this chart, and cannot usefully be: Helm
+# stores its release record as a Secret in the release namespace, so that
+# namespace has to exist before any template is applied. A chart that contains
+# its own release Namespace fails with "namespaces ... not found" on a clean
+# cluster — tested.
+#
+# It matters here beyond tidiness. The namespace carries the Pod Security
+# Admission labels that permit the agent's capability set, and those labels have
+# to be in place before the DaemonSet's pods are admitted. So the namespace is
+# applied first, from deploy/k8s/00-namespace.yaml, where it is version
+# controlled alongside the labels:
+#
+#   kubectl apply -f deploy/k8s/00-namespace.yaml
+#   helm install stable deploy/helm/ebpf-agent -n ebpf-observability
+#
+# `--create-namespace` is the wrong tool: it creates an unlabelled namespace,
+# which on a cluster enforcing PSA rejects every pod this chart schedules.
+
+rbac:
+  # The agent never calls the Kubernetes API. It has no Role, and its service
+  # account token is not mounted: a process holding CAP_SYS_ADMIN should not
+  # also carry a cluster credential it has no use for.
+  create: true
+
+podAnnotations: {}
+podLabels: {}
+
+# tracefs, mounted read-only. The sched_process_exec tracepoint's numeric id is
+# readable only from here; without it the agent fails at startup. This is a path
+# rather than a boolean because a node may mount tracefs at
+# /sys/kernel/debug/tracing instead.
+tracefsPath: /sys/kernel/tracing
+
+# Privilege.
+#
+# Not exposed as values, and that is the decision rather than an omission. Each
+# entry below was established by removing it and observing what broke
+# (docs/capabilities.md, deploy/k8s/README.md, ADR-006). A values.yaml that
+# invites an operator to trim the list invites a silent loss of coverage:
+# dropping CAP_SYS_PTRACE, for instance, costs three of seven targets and
+# produces no error at all.
+#
+# Changing them means editing templates/daemonset.yaml, where the reasoning is
+# next to the value.

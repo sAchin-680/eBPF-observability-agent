@@ -130,11 +130,9 @@ spec:
           image: ghcr.io/sachin-680/ebpf-observability-agent:0.2.0-phase2
           imagePullPolicy: IfNotPresent
           args:
-            - --otlp-endpoint=$(OTLP_ENDPOINT)
+            - --otlp-endpoint=tempo.observability.svc.cluster.local:4317
             - --metrics-addr=:9464
           env:
-            - name: OTLP_ENDPOINT
-              value: tempo.observability.svc.cluster.local:4317
             # Reported on every span as a resource attribute, so a trace can be
             # attributed to the node that captured it.
             - name: NODE_NAME

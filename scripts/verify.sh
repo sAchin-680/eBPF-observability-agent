@@ -52,6 +52,21 @@ for f in scripts/*.sh samples/*.sh; do
 done
 ok "shell scripts parse"
 
+# deploy/k8s/ and deploy/helm/ describe the same pod, and nothing but this stops
+# a security setting being fixed in one and left wrong in the other. Skipped
+# rather than failed where helm is absent: the VM that runs the kernel tests is
+# not required to carry a Kubernetes toolchain.
+if command -v helm >/dev/null 2>&1; then
+  if out=$(bash scripts/helm-diff-manifests.sh 2>&1); then
+    ok "chart matches raw manifests"
+  else
+    bad "chart and raw manifests differ"
+    sed 's/^/        /' <<<"$out" | head -20
+  fi
+else
+  printf "   \033[2m%s\033[0m\n" "skip  chart/manifest drift (helm not installed)"
+fi
+
 step "tests"
 if out=$(go test ./internal/... 2>&1); then ok "unit"; else bad "unit"; grep -E "FAIL|---" <<<"$out" | head -10 | sed 's/^/        /'; fi
 
