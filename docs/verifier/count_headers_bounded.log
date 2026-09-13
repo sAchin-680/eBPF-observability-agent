@@ -5,5 +5,5 @@ kernel:  6.8.0-138-generic
 
 accepted by the verifier
 instructions in program: 22
-verification took: 49ms
+verification took: 48ms
 

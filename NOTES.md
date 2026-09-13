@@ -1186,3 +1186,67 @@ is the purpose, and the distinction is visible in what is fatal.
 
 The agent exits, leaves nothing loaded, and the load average is unchanged before
 and after.
+
+---
+
+## 2026-09-13 — Two bugs in the verification scripts
+
+### pipefail turned every grep -q check into its opposite
+
+**Symptom:** `scripts/check-env.sh` reported `SSL_write` as not exported by a
+library that plainly exports it, while the agent was capturing traffic on that
+same library.
+
+```
+nm -D libssl.so.3 | grep -qE ' T SSL_write(@|$)'
+  without pipefail: exit=0
+  with pipefail:    exit=141
+```
+
+**Cause:** `grep -q` exits on its first match and closes the pipe. The producer
+is then killed by SIGPIPE, exit 141, and `pipefail` makes that the pipeline's
+status. Six instances across four scripts had the same latent bug.
+
+**Worth carrying forward:** the failure mode is inversion, not error. A check
+that finds what it is looking for reports that it did not. This one told a new
+user their environment could not support the agent.
+
+### A pipeline that never ends, blamed on the agent
+
+**Symptom:** The Phase 1 demonstration produced almost no records, and the agent
+log ended with a clean shutdown — as though something had stopped it four
+seconds in.
+
+**Two wrong diagnoses.** First, that a process-group signal was reaching the
+agent through its `sudo` parent; reordering to `setsid sudo` changed nothing.
+Second, that the EXIT trap was firing in a subshell; a direct test showed it
+fires only in the main shell.
+
+**Cause:** the script piped `make run` into `grep`. That target leaves services
+running in the background, and although each has its output redirected,
+something in the chain keeps the pipe's write end open, so the reader never sees
+EOF.
+
+```
+make -C samples run >/dev/null 2>&1        exit=0
+make -C samples run 2>&1 | cat >/dev/null  exit=124 (timed out)
+```
+
+The script hung at step 4. Whatever eventually killed it fired the EXIT trap,
+which stopped the agent — and the agent's clean shutdown line was the only
+visible evidence, pointing at the agent rather than at the pipe.
+
+**Resolution:** redirect to a file and print it afterwards. No reader, nothing
+to block.
+
+**Worth carrying forward:** the symptom appeared in the component furthest from
+the cause. Two plausible explanations were tested and rejected before the real
+one, and both of those explanations were about signals, because that is what the
+symptom looked like.
+
+### A demonstration that showed nothing, correctly
+
+The same script then ran to completion and printed no records. The agent prints
+records only when no trace backend is reachable, on the grounds that they are
+going somewhere better — which is right for running it, and leaves a
+demonstration blank. Fixed by passing `--print`.

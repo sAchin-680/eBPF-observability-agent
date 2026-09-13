@@ -104,7 +104,7 @@ make -C samples run >/dev/null 2>&1
 sleep 3
 
 rm -f "$AGENT_LOG"
-sudo setsid ./bin/agent > "$AGENT_LOG" 2>&1 < /dev/null &
+setsid sudo ./bin/agent > "$AGENT_LOG" 2>&1 < /dev/null &
 sleep 7
 sed -n 's/^/   /p' <<<"$(grep -E 'tracing .* at startup' "$AGENT_LOG")"
 
