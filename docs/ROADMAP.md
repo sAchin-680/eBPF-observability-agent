@@ -125,7 +125,7 @@ privileged node-level agent.
 - [x] Capability scoping documented — [capabilities.md](capabilities.md),
       [ADR-006](adr/006-capability-scoping.md), and the container-level
       measurements in [`deploy/k8s/README.md`](../deploy/k8s/README.md)
-- [ ] CI matrix across kernel versions, passing
+- [x] CI matrix across kernel versions, passing — [ci.md](ci.md)
 - [ ] Agent self-health dashboard
 
 **Tasks**
@@ -139,7 +139,7 @@ privileged node-level agent.
 | 5 | Canary node selector, deployed to one or two nodes | Complete — two releases of one chart on a three-node cluster; promotion is a node label change |
 | 6 | Canary verification: node CPU, `dmesg`, traced-application health | Complete — [canary.md](canary.md), `scripts/gate-canary.sh`, demonstrated failing |
 | 7 | ArgoCD sync for full-fleet promotion by Git commit | Not started |
-| 8 | GitHub Actions matrix build: compile and test suite per kernel version | Not started |
+| 8 | GitHub Actions matrix build: compile and test suite per kernel version | Complete — [ci.md](ci.md); compiles once, runs on 5.15, 6.1 and 6.6 in QEMU |
 | 9 | Agent self-health dashboard: desired versus ready, drop rate, per-node CPU and memory | Not started |
 | 10 | Canary to full rollout recording | Not started |
 

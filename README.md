@@ -99,6 +99,7 @@ result demonstrates it, and every entry below links to that evidence through
 | Canary rollout, gated on node and application health | Complete |
 | Measured overhead and ring buffer drop-rate benchmarks | Complete |
 | Multi-kernel validation, one binary on 5.15 and 6.8 | Complete |
+| CI: one build, verified on three kernels in QEMU | Complete |
 | Failure matrix, all four rows | Complete |
 
 The phase plan is in [`docs/ROADMAP.md`](docs/ROADMAP.md).
@@ -164,7 +165,7 @@ is needed to build and run the agent.
 | :--- | :--- |
 | Kernel | Linux ≥ 5.8 with `CONFIG_DEBUG_INFO_BTF=y` |
 | Toolchain | `clang` / `llvm` with BPF backend, `bpftool`, libbpf headers |
-| Language | Go 1.23 or later |
+| Language | Go 1.25 or later, matching `go.mod` |
 | Privileges | Five capabilities with `ALL` dropped; see [`docs/capabilities.md`](docs/capabilities.md) |
 
 The agent never requires `--privileged`.
@@ -199,6 +200,12 @@ precisely what breaks if any check fails. The agent is designed to fail closed
 with a clear error rather than load onto a node it cannot safely instrument.
 
 Run `make help` for the full target list.
+
+Every push is checked against three kernels: the artifacts are compiled once and
+booted on 5.15, 6.1 and 6.6 in QEMU, because a matrix that rebuilds per kernel
+would test the toolchain rather than the binary. [`docs/ci.md`](docs/ci.md)
+describes each gate, what it protects against, and which ones were removed for
+reporting noise.
 
 ---
 
