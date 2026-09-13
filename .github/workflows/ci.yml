@@ -1,0 +1,133 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Everything is compiled exactly once, here. The kernel matrix below runs
+  # these artifacts and is forbidden from rebuilding them: NFR5 claims that one
+  # binary works across kernels, and a matrix that compiles per kernel tests the
+  # toolchain instead and would pass whether or not the claim held.
+  build:
+    name: build and unit test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install the BPF toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang llvm libbpf-dev
+          # bpftool is packaged under several names depending on release; the
+          # linux-tools variant is tied to the running kernel and is missing on
+          # some runner images, so try the standalone package first.
+          sudo apt-get install -y bpftool \
+            || sudo apt-get install -y "linux-tools-$(uname -r)" linux-tools-generic
+          clang --version | head -1
+          bpftool version | head -1
+
+      - name: Generate vmlinux.h from the runner's BTF
+        run: |
+          # Deliberately the runner's own kernel, not the oldest in the matrix.
+          # CO-RE relocates field offsets at load time against the target
+          # kernel's BTF, so which kernel supplied the header should not matter —
+          # and the matrix below is what proves it.
+          make vmlinux
+          echo "vmlinux.h: $(wc -l < bpf/vmlinux.h) lines from $(uname -r)"
+
+      - name: Compile BPF objects and Go bindings
+        run: go generate ./...
+
+      - name: gofmt and vet
+        run: |
+          unformatted=$(gofmt -l . | grep -v _bpfel || true)
+          if [ -n "$unformatted" ]; then echo "$unformatted"; exit 1; fi
+          go vet ./...
+
+      - name: Unit tests
+        run: go test ./internal/... ./test/unit/...
+
+      - name: Build the artifacts the matrix will run
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 go build -trimpath -o dist/agent ./cmd/agent
+          # Compiled, not run: these need a kernel to load into, which is what
+          # the matrix provides.
+          go test -c -o dist/toolchain.test ./test/toolchain
+          go test -c -o dist/verifier.test ./test/verifier
+          sha256sum dist/* | tee dist/SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+  # The claim under test: the artifacts above load and run on kernels other than
+  # the one they were built against.
+  #
+  # GitHub's runners offer exactly one kernel, so the older ones are booted in
+  # QEMU from the images Cilium publishes for this purpose. 5.15 is in the
+  # matrix because it is the oldest kernel this project claims to support and
+  # the one most likely to break first.
+  kernel-matrix:
+    name: kernel ${{ matrix.kernel }}
+    needs: build
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel: ["5.15", "6.1", "6.6"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Install QEMU and virtme-ng
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 qemu-utils python3-pip busybox-static
+          pipx install virtme-ng || pip install --break-system-packages virtme-ng
+          vng --version
+
+      - name: Fetch the kernel image
+        run: |
+          image="ghcr.io/cilium/ci-kernels:${{ matrix.kernel }}"
+          docker create --name k "$image" >/dev/null
+          docker cp k:/boot/vmlinuz ./vmlinuz
+          docker rm k >/dev/null
+          ls -l ./vmlinuz
+
+      - name: Run the artifacts on kernel ${{ matrix.kernel }}
+        run: |
+          chmod +x dist/agent dist/*.test scripts/ci/kernel-smoke.sh
+          # virtme-ng boots the given kernel with the host filesystem as its
+          # root, so the artifacts are the same files on disk — nothing is
+          # copied into an image, and nothing is rebuilt.
+          vng --run ./vmlinuz --user root --verbose \
+              --exec "cd $PWD && ./scripts/ci/kernel-smoke.sh dist" \
+            | tee smoke.log
+          # vng's exit status reflects the VM, not the command inside it, so the
+          # result is read from the output. Without this the job passes even
+          # when every check inside the VM failed.
+          grep -q "0 failed" smoke.log
