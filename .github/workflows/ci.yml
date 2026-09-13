@@ -34,13 +34,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang llvm libbpf-dev
-          # bpftool is packaged under several names depending on release; the
-          # linux-tools variant is tied to the running kernel and is missing on
-          # some runner images, so try the standalone package first.
-          sudo apt-get install -y bpftool \
-            || sudo apt-get install -y "linux-tools-$(uname -r)" linux-tools-generic
+          # Ubuntu's `bpftool` command is a dispatcher that runs the build
+          # matching `uname -r` and refuses if that exact package is absent.
+          # Runners boot an Azure kernel with no matching linux-tools package,
+          # so the dispatcher always fails there. linux-tools-generic ships a
+          # real binary under a versioned path; use that directly.
+          sudo apt-get install -y linux-tools-common linux-tools-generic
+          BPFTOOL=$(ls -1 /usr/lib/linux-tools/*/bpftool 2>/dev/null | tail -1)
+          [ -x "$BPFTOOL" ] || { echo "no bpftool binary found"; exit 1; }
+          echo "BPFTOOL=$BPFTOOL" >> "$GITHUB_ENV"
           clang --version | head -1
-          bpftool version | head -1
+          "$BPFTOOL" version | head -1
 
       - name: Generate vmlinux.h from the runner's BTF
         run: |
