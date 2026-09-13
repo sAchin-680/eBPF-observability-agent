@@ -137,7 +137,7 @@ privileged node-level agent.
 | 3 | Scope and document capabilities, with the older-kernel fallback | Complete — [capabilities.md](capabilities.md), NFR4 corrected |
 | 4 | Helm chart | Complete — `deploy/helm/ebpf-agent`, with a drift check against `deploy/k8s/` in `make verify` |
 | 5 | Canary node selector, deployed to one or two nodes | Complete — two releases of one chart on a three-node cluster; promotion is a node label change |
-| 6 | Canary verification: node CPU, `dmesg`, traced-application health | Not started |
+| 6 | Canary verification: node CPU, `dmesg`, traced-application health | Complete — [canary.md](canary.md), `scripts/gate-canary.sh`, demonstrated failing |
 | 7 | ArgoCD sync for full-fleet promotion by Git commit | Not started |
 | 8 | GitHub Actions matrix build: compile and test suite per kernel version | Not started |
 | 9 | Agent self-health dashboard: desired versus ready, drop rate, per-node CPU and memory | Not started |

@@ -96,6 +96,7 @@ result demonstrates it, and every entry below links to that evidence through
 | Grafana dashboards, provisioned from version control | Complete |
 | Documented verifier constraint on in-kernel parsing | Complete |
 | Kubernetes DaemonSet deployment | Complete |
+| Canary rollout, gated on node and application health | Complete |
 | Measured overhead and ring buffer drop-rate benchmarks | Complete |
 | Multi-kernel validation, one binary on 5.15 and 6.8 | Complete |
 | Failure matrix, all four rows | Complete |
