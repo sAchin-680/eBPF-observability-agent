@@ -97,6 +97,7 @@ result demonstrates it, and every entry below links to that evidence through
 | Documented verifier constraint on in-kernel parsing | Complete |
 | Kubernetes DaemonSet deployment | Complete |
 | Canary rollout, gated on node and application health | Complete |
+| Agent self-health dashboard, provisioned from version control | Complete |
 | Measured overhead and ring buffer drop-rate benchmarks | Complete |
 | Multi-kernel validation, one binary on 5.15 and 6.8 | Complete |
 | CI: one build, verified on three kernels in QEMU | Complete |

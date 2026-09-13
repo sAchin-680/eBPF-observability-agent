@@ -1,0 +1,17 @@
+# Where the agent's own health is observed from.
+#
+# A separate namespace from ebpf-observability, and separate on purpose: this is
+# the thing that watches the agent, and it should not share a failure domain
+# with it. If the agent's namespace is drained, deleted or misconfigured, the
+# dashboard that would show you that is still up.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability
+  labels:
+    app.kubernetes.io/part-of: observability
+    # Nothing here is privileged. Only the agent needs capabilities; Prometheus
+    # and Grafana are ordinary workloads and are held to the strict profile so
+    # that the exception stays visible where it is actually required.
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: restricted

@@ -1,0 +1,51 @@
+   rollout of 0.3.0-phase4 at 2026-09-13T18:02:41Z
+
+1. Where the fleet is now
+   stable: ghcr.io/sachin-680/ebpf-observability-agent:0.2.0-phase2
+   canary: ghcr.io/sachin-680/ebpf-observability-agent:0.2.0-phase2
+   ebpf-control-plane     (stable)
+   ebpf-worker            canary
+   ebpf-worker2           stable
+   1 node(s) will receive 0.3.0-phase4 first
+
+2. 18:02:42Z  Canary: 0.3.0-phase4 onto the labelled node only
+   STATUS: deployed
+   canary running 0.3.0-phase4
+   settling for 60s before measuring
+
+3. 18:03:54Z  Gate: is the canary node as healthy as a stable one
+
+1. Both releases are deployed, on disjoint nodes
+   canary  -> ebpf-worker 
+   stable  -> ebpf-control-plane ebpf-worker2 
+   disjoint: comparing ebpf-worker against ebpf-worker2
+   canary image: ghcr.io/sachin-680/ebpf-observability-agent:0.3.0-phase4
+   stable image: ghcr.io/sachin-680/ebpf-observability-agent:0.2.0-phase2
+
+2. Apply identical load to both nodes
+   300 HTTPS requests on each node, started together
+
+3. Node CPU during the load
+   ebpf-worker (canary)   75.6%
+   ebpf-worker2 (stable)  4.5%
+   canary node CPU is 16.80x the stable node (limit 1.30x)
+
+4. Traced-application health
+   canary node            RESULT ok=300 failed=0 mean_ms=4.80 p50_ms=4.45
+   stable node            RESULT ok=300 failed=0 mean_ms=4.58 p50_ms=4.27
+   median request within 1.25x of stable (ratio 1.04)
+
+5. Kernel log
+   kind shares one kernel across all nodes; this is host-wide, not per-node
+   no BPF, uprobe, verifier or taint messages since this run started
+
+6. Agent self-health
+   canary   canary-ebpf-agent-gkx5t      ebpf-worker          restarts=1   drops=0     attached=1
+   canary has restarted 1 times
+   stable   stable-ebpf-agent-7jw7t      ebpf-worker2         restarts=0   drops=0     attached=3
+
+Verdict
+   FAIL — do not promote
+   gate failed — stopping here, with 0.3.0-phase4 on the canary node only
+   roll back with: helm upgrade canary deploy/helm/ebpf-agent -n ebpf-observability -f deploy/helm/ebpf-agent/values-canary.yaml --set image.tag=<previous>
+   transcript: docs/rollout-20260913-233241.log
