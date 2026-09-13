@@ -49,7 +49,7 @@ the value of what is.
 | NFR1 | Overhead is measured rather than assumed: p50/p95/p99 latency delta at increasing request rates | met — [docs/benchmarks/](benchmarks/), measured against a CPU-matched control rather than an idle machine, which inverts the sign |
 | NFR2 | Ring buffer drop rate is observable and logged; events are never dropped silently | met — exported as a metric; loss begins between 8,000 and 12,000 events/s, see [docs/benchmarks/](benchmarks/) |
 | NFR3 | An agent crash does not affect the traced application, demonstrated by test rather than by argument | met — agent killed with SIGKILL mid-load; 39,995 successful responses against a 39,987 baseline, zero errors. See [failure-matrix.md](failure-matrix.md) |
-| NFR4 | No `--privileged`. Capabilities scoped to `CAP_BPF` and `CAP_PERFMON`, or `CAP_SYS_ADMIN` on older kernels, documented per operation | pending |
+| NFR4 | No `--privileged`, with capabilities scoped and documented per operation | **requirement corrected.** The stated pair does not work: `CAP_BPF`+`CAP_PERFMON` cannot start the agent, and uprobe attachment needs `CAP_SYS_ADMIN` regardless of `perf_event_paranoid`. Measured set is five capabilities with `ALL` dropped; still not `--privileged`. See [capabilities.md](capabilities.md) and [ADR-006](adr/006-capability-scoping.md) |
 | NFR5 | One compiled binary runs unmodified across all tested kernel versions | met — the same binary, by checksum, passes 8 of 8 checks on 5.15 and 6.8. See [kernel-matrix.md](kernel-matrix.md) |
 | NFR6 | Canary rollout is verifiable through node CPU, `dmesg` kernel warnings, and traced-application health before full fleet rollout | pending |
 
@@ -68,6 +68,13 @@ probes being torn down when the owning file descriptors close — is a reason to
 expect it, not evidence that it holds. The verification is a test that kills
 the agent mid-load and asserts the traced application's latency and error rate
 are unchanged.
+
+**NFR4 was wrong as written, and is corrected rather than restated.** It named
+`CAP_BPF` and `CAP_PERFMON`, which is what those capabilities exist for and a
+reasonable expectation before anything was built. Measurement showed the agent
+cannot start under them. The requirement now records the measured set, and the
+experiment that produced it is committed so the result can be rechecked on
+another kernel rather than believed.
 
 **NFR2 exists because the failure mode is silence.** A ring buffer that
 overflows drops events without error. If drop rate is not exported, the agent

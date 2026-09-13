@@ -164,7 +164,7 @@ is needed to build and run the agent.
 | Kernel | Linux ≥ 5.8 with `CONFIG_DEBUG_INFO_BTF=y` |
 | Toolchain | `clang` / `llvm` with BPF backend, `bpftool`, libbpf headers |
 | Language | Go 1.23 or later |
-| Privileges | `CAP_BPF` + `CAP_PERFMON`, or `CAP_SYS_ADMIN` on older kernels |
+| Privileges | Five capabilities with `ALL` dropped; see [`docs/capabilities.md`](docs/capabilities.md) |
 
 The agent never requires `--privileged`.
 
@@ -245,7 +245,7 @@ the schedule is in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 | [003](docs/adr/003-tracepoints-over-kprobes.md) | Prefer tracepoints, record where a kprobe is unavoidable |
 | [004](docs/adr/004-core-over-bcc.md) | Compile once with CO-RE rather than per host with BCC |
 | [005](docs/adr/005-generated-trace-ids.md) | Generate a trace ID per request, propagate no context |
-| 006 | `CAP_BPF` + `CAP_PERFMON` rather than `--privileged` |
+| [006](docs/adr/006-capability-scoping.md) | Enumerated capabilities, including `CAP_SYS_ADMIN`, rather than privileged |
 | 007 | Canary rollout rather than fleet-wide apply |
 
 ---
@@ -255,6 +255,11 @@ the schedule is in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 The agent runs with elevated kernel privileges by necessity: it reads process
 memory via uprobes and requires `hostPID` in its Kubernetes deployment. It
 does not run `--privileged`.
+
+The agent needs `CAP_SYS_ADMIN` to attach uprobes — measured, not assumed, and
+close to root. It is still not `--privileged`: confinement stays in place and
+host devices are not exposed. [`docs/capabilities.md`](docs/capabilities.md)
+records what each capability enables and what breaks without it.
 
 Only request metadata is captured — method, path, status, and timing. Request
 and response bodies are never persisted or exported, despite passing through
