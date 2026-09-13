@@ -20,7 +20,10 @@ capture across three language runtimes.
 
 - [x] Agent traces three unmodified sample applications
 - [x] Data-path diagram committed — [data-path.md](data-path.md)
-
+- [~] Recording of an empty source diff alongside live traces — **dropped.**
+      `scripts/demo.sh` produces the same evidence on demand and can be re-run
+      by a reader; a recording shows only that it worked once, on a machine
+      nobody can inspect
 
 **Tasks**
 
