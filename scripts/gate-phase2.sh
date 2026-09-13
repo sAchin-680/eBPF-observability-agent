@@ -30,20 +30,6 @@ AGENT_LOG=samples/logs/agent.log
 # starts when this run does.
 RUN_START=$(date +%s)
 
-# Every trace query is scoped to this run. Tempo retains traces for an hour, so
-# a previous run of this test leaves its own evidence behind — and an unscoped
-# query would find it and conclude the service was already known. Rather than
-# wiping the backend, which would also discard unrelated data, the window
-# starts when this run does.
-RUN_START=$(date +%s)
-
-# Every trace query is scoped to this run. Tempo retains traces for an hour, so
-# a previous run of this test leaves its own evidence behind — and an unscoped
-# query would find it and conclude the service was already known. Rather than
-# wiping the backend, which would also discard unrelated data, the window
-# starts when this run does.
-RUN_START=$(date +%s)
-
 bold() { printf "\n\033[1m%s\033[0m\n" "$1"; }
 ok()   { printf "   \033[32m%s\033[0m\n" "$1"; }
 bad()  { printf "   \033[31m%s\033[0m\n" "$1"; }
