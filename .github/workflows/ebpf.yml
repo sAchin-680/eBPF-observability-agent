@@ -86,7 +86,7 @@ jobs:
       - name: Fetch the kernel image
         run: |
           image="ghcr.io/cilium/ci-kernels:${{ matrix.kernel }}"
-          docker create --name k "$image" >/dev/null
+          docker create --name k "$image" true >/dev/null
           docker cp k:/boot/vmlinuz ./vmlinuz
           docker rm k >/dev/null
           ls -l ./vmlinuz

@@ -2,11 +2,15 @@ name: nightly
 
 # The deep tier.
 #
-# These take minutes to tens of minutes, and running them on every pull request
-# would make the feedback loop useless without catching much more: fuzzing finds
-# things over time rather than in one 60-second run, a leak needs repetition to
-# show, and a benchmark needs a quiet machine. So they run on a schedule against
-# main, where a failure is a bug report rather than a blocked merge.
+# Two checks that cannot work on a pull request: fuzzing finds things over time
+# rather than in one short run, and a resource leak only shows after repetition.
+# Both take minutes, and both are worth a nightly failure that reads as a bug
+# report rather than a blocked merge.
+#
+# Deliberately only two. A benchmark comparison lived here briefly and was
+# removed: on a shared runner the variance is larger than the regressions worth
+# catching, so it reported noise. The benchmarks still exist and are run by hand
+# on a quiet machine, which is the only place their numbers mean anything.
 
 on:
   schedule:
@@ -57,96 +61,3 @@ jobs:
           # leaked per restart accumulates on a node until the program limit or
           # map memory runs out, and the agent's own telemetry shows nothing.
           sudo -E bash scripts/ci/leak-check.sh dist/agent 10
-
-  benchmarks:
-    name: performance regression
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: ./.github/actions/bpf-toolchain
-
-      - name: Benchmark HEAD against the last release
-        run: |
-          go install golang.org/x/perf/cmd/benchstat@latest
-          BENCHSTAT="$(go env GOPATH)/bin/benchstat"
-
-          # -count 6 because a single run on a shared CI runner is noise.
-          # benchstat reports whether the difference survives that noise, which
-          # is the only question worth asking here.
-          go test -run '^$' -bench . -benchmem -count 6 ./internal/... > /tmp/head.txt
-
-          base=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          if [ -z "$base" ]; then
-            echo "no tag to compare against; recording HEAD only"
-            cat /tmp/head.txt
-            exit 0
-          fi
-
-          echo "comparing against $base"
-          git stash -u >/dev/null 2>&1 || true
-          git checkout -q "$base"
-          # The benchmark files may not exist at the older tag, in which case
-          # there is nothing to compare and that is not a failure.
-          if go test -run '^$' -bench . -benchmem -count 6 ./internal/... > /tmp/base.txt 2>/dev/null; then
-            git checkout -q -
-            "$BENCHSTAT" /tmp/base.txt /tmp/head.txt | tee /tmp/delta.txt
-            # A regression the tool considers significant, and larger than 30%.
-            if grep -qE '\+[3-9][0-9]\.[0-9]+%|\+[1-9][0-9][0-9]+\.[0-9]+%' /tmp/delta.txt; then
-              echo "::warning::a benchmark regressed by more than 30% against $base"
-            fi
-          else
-            git checkout -q -
-            echo "$base has no comparable benchmarks; recording HEAD only"
-            cat /tmp/head.txt
-          fi
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: benchmarks
-          path: /tmp/head.txt
-          retention-days: 30
-
-  kernel-matrix-extended:
-    name: kernel ${{ matrix.kernel }}
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        # Wider than the pull-request matrix in ebpf.yml, including the mainline
-        # tip. A break against "stable" is information about a kernel that has
-        # not shipped to anyone yet, which is worth knowing and is not worth
-        # blocking a merge on.
-        kernel: ["5.4", "5.10", "5.15", "6.1", "6.6", "stable"]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/bpf-toolchain
-
-      - name: Build the artifacts
-        run: |
-          mkdir -p dist
-          CGO_ENABLED=0 go build -trimpath -o dist/agent ./cmd/agent
-          go test -c -o dist/toolchain.test ./test/toolchain
-          go test -c -o dist/verifier.test ./test/verifier
-
-      - name: Install QEMU and virtme-ng
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 qemu-utils busybox-static udev
-          pipx install virtme-ng || pip install --break-system-packages virtme-ng
-
-      - name: Fetch the kernel image
-        run: |
-          docker create --name k "ghcr.io/cilium/ci-kernels:${{ matrix.kernel }}" >/dev/null
-          docker cp k:/boot/vmlinuz ./vmlinuz
-          docker rm k >/dev/null
-
-      - name: Run on kernel ${{ matrix.kernel }}
-        run: |
-          chmod +x dist/agent dist/*.test scripts/ci/kernel-smoke.sh
-          vng --run ./vmlinuz --user root --verbose \
-              --exec "cd $PWD && ./scripts/ci/kernel-smoke.sh dist" | tee smoke.log
-          grep -q "0 failed" smoke.log

@@ -47,7 +47,7 @@ jobs:
 
       - name: Verify on kernel ${{ matrix.kernel }}
         run: |
-          docker create --name k "ghcr.io/cilium/ci-kernels:${{ matrix.kernel }}" >/dev/null
+          docker create --name k "ghcr.io/cilium/ci-kernels:${{ matrix.kernel }}" true >/dev/null
           docker cp k:/boot/vmlinuz ./vmlinuz
           docker rm k >/dev/null
           chmod +x dist/agent dist/*.test scripts/ci/kernel-smoke.sh
@@ -78,13 +78,6 @@ jobs:
           # checkable by someone who was not there, which is the claim the
           # kernel matrix exists to support.
 
-      - name: SBOM
-        uses: anchore/sbom-action@v0
-        with:
-          path: ./
-          format: spdx-json
-          output-file: dist/sbom.spdx.json
-
       - name: Container image
         run: |
           # The same Dockerfile used in development. vmlinux.h is already
@@ -105,6 +98,5 @@ jobs:
           files: |
             dist/agent-linux-amd64
             dist/SHA256SUMS
-            dist/sbom.spdx.json
           generate_release_notes: true
           fail_on_unmatched_files: true
