@@ -69,7 +69,7 @@ jobs:
       - uses: ./.github/actions/bpf-toolchain
 
       - name: Unit tests with coverage
-        run: go test -coverprofile=coverage.out ./internal/... ./test/unit/...
+        run: go test -coverprofile=coverage.out ./internal/...
 
       - name: Coverage floor
         run: |

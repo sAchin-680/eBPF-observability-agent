@@ -225,11 +225,15 @@ docs/
   benchmarks/           raw overhead and load-test results
   diagrams/             architecture and data-path diagrams
 scripts/                environment provisioning and verification
+  ci/                   checks the CI matrix runs inside each kernel VM
 test/
-  unit/                 parser and correlation logic
-  integration/          full pipeline against sample applications
-  load/                 overhead and drop-rate benchmarks
+  toolchain/            loads a program into the kernel: the build pipeline works
+  verifier/             what the verifier accepts and rejects, recorded
 ```
+
+Unit tests live beside the code they test, in `internal/`. Load and integration
+testing is done by the scripts in `scripts/`, against the real sample
+applications rather than against mocks.
 
 ---
 

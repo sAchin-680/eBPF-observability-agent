@@ -103,7 +103,13 @@ provision:
       #!/bin/bash
       set -eux -o pipefail
       # Go from apt is often behind; install a current toolchain per-user.
-      GO_VER=1.23.4
+      #
+      # The patch version is not cosmetic. govulncheck reports standard-library
+      # vulnerabilities against the toolchain that built the binary, so a
+      # development VM pinned to an old patch release produces a binary with
+      # known issues in crypto/tls and crypto/x509 — which this agent links,
+      # because it exports over TLS.
+      GO_VER=1.25.13
       ARCH=$(dpkg --print-architecture)
       if ! /usr/local/go/bin/go version 2>/dev/null | grep -q "$GO_VER"; then
         curl -fsSL "https://go.dev/dl/go${GO_VER}.linux-${ARCH}.tar.gz" -o /tmp/go.tgz
