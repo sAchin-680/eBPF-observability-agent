@@ -122,7 +122,7 @@ verify-toolchain: generate ## Load a probe into the kernel to prove the pipeline
 
 .PHONY: test
 test: ## Run Go unit tests (parser, correlation — no kernel needed)
-	@$(GO) test ./internal/... ./test/unit/...
+	@$(GO) test ./internal/...
 
 .PHONY: lint
 lint: ## gofmt + go vet

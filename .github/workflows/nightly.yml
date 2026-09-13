@@ -1,0 +1,63 @@
+name: nightly
+
+# The deep tier.
+#
+# Two checks that cannot work on a pull request: fuzzing finds things over time
+# rather than in one short run, and a resource leak only shows after repetition.
+# Both take minutes, and both are worth a nightly failure that reads as a bug
+# report rather than a blocked merge.
+#
+# Deliberately only two. A benchmark comparison lived here briefly and was
+# removed: on a shared runner the variance is larger than the regressions worth
+# catching, so it reported noise. The benchmarks still exist and are run by hand
+# on a quiet machine, which is the only place their numbers mean anything.
+
+on:
+  schedule:
+    - cron: "31 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: fuzz the parsers
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/bpf-toolchain
+
+      - name: Fuzz the HTTP parser
+        run: |
+          # Every byte this parser sees came out of another process's memory
+          # through a ring buffer. It is arbitrary input by construction — a
+          # truncated TLS record, a binary protocol that is not HTTP, a payload
+          # cut mid-header — and a panic here takes the agent down on a node.
+          go test -run '^$' -fuzz FuzzParse -fuzztime 5m ./internal/httpparse
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-corpus
+          path: internal/httpparse/testdata/fuzz/
+          retention-days: 30
+
+  leak:
+    name: resource cleanup
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/bpf-toolchain
+
+      - name: Build
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 go build -trimpath -o dist/agent ./cmd/agent
+
+      - name: Start and stop the agent repeatedly
+        run: |
+          # BPF programs and maps are kernel objects, not process memory: one
+          # leaked per restart accumulates on a node until the program limit or
+          # map memory runs out, and the agent's own telemetry shows nothing.
+          sudo -E bash scripts/ci/leak-check.sh dist/agent 10

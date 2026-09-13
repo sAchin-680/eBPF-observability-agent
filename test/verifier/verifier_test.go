@@ -87,9 +87,13 @@ func TestVerifierOnInKernelHeaderParsing(t *testing.T) {
 			// stop at the first rejection and say nothing about the rest.
 			opts := bpf.ProgramOptions{LogDisabled: true}
 			if a.captureLog {
+				// LogSize was removed in cilium/ebpf v0.18: the library now
+				// grows the log buffer itself and retries, which is what this
+				// test used to do by hand with a fixed 1 MiB. LogSizeStart only
+				// sets where that growth begins.
 				opts = bpf.ProgramOptions{
-					LogLevel: bpf.LogLevelInstruction,
-					LogSize:  1 << 20,
+					LogLevel:     bpf.LogLevelInstruction,
+					LogSizeStart: 1 << 20,
 				}
 			}
 

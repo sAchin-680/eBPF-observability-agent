@@ -1,0 +1,121 @@
+name: ci
+
+# The fast gates. Everything here runs on the runner's own kernel and finishes
+# in a few minutes, so a pull request gets an answer quickly. Anything that
+# needs a different kernel, a workload, or minutes of load lives in ebpf.yml or
+# nightly.yml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: format and static analysis
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/bpf-toolchain
+
+      - name: gofmt
+        run: |
+          # bpf2go output is generated and not ours to format.
+          unformatted=$(gofmt -l . | grep -v _bpfel || true)
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt-clean:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      # No staticcheck. It was here and was removed: it cannot read the export
+      # data of a Go toolchain newer than its own release, and this repository
+      # has to build with the current Go to pick up standard-library security
+      # fixes (see the composite action). A linter that fails on the compiler
+      # this project must use reports its own version skew, not our bugs.
+      # `go vet` ships with the toolchain and cannot drift from it.
+
+      - name: CLI help works
+        run: |
+          # The smallest possible documentation check: the flags the README and
+          # the DaemonSet manifests pass must still exist.
+          go run ./cmd/agent --help 2>&1 | tee /tmp/help.txt || true
+          for flag in otlp-endpoint metrics-addr print; do
+            grep -q -- "-$flag" /tmp/help.txt || { echo "missing flag: -$flag"; exit 1; }
+          done
+
+  test:
+    name: unit tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/bpf-toolchain
+
+      - name: Unit tests
+        run: go test ./internal/...
+
+      - name: Race detector
+        # The agent drains a ring buffer on one goroutine, expires correlator
+        # state on a timer, and serves metrics on a third. That is exactly the
+        # shape of bug the race detector finds and review does not.
+        run: go test -race ./internal/...
+
+  build:
+    name: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/bpf-toolchain
+
+      - name: Build the agent
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o dist/agent ./cmd/agent
+          sha256sum dist/agent
+
+      - name: Manifests parse, and the chart matches them
+        run: |
+          # deploy/k8s/ and deploy/helm/ describe the same pod. Nothing else
+          # stops a security setting being fixed in one and left wrong in the
+          # other.
+          python3 -c "
+          import yaml, glob, sys
+          for f in sorted(glob.glob('deploy/k8s/*.yaml')):
+              docs = [d for d in yaml.safe_load_all(open(f)) if d]
+              print(f, '->', [d['kind'] for d in docs])
+          "
+          curl -sSfL https://get.helm.sh/helm-v3.16.3-linux-amd64.tar.gz \
+            | sudo tar xz -C /usr/local/bin --strip-components=1 linux-amd64/helm
+          helm lint deploy/helm/ebpf-agent
+          bash scripts/helm-diff-manifests.sh
+
+      - name: Shell scripts parse
+        run: |
+          for f in scripts/*.sh scripts/ci/*.sh samples/*.sh; do
+            [ -f "$f" ] || continue
+            bash -n "$f" || exit 1
+          done
+
+      - name: Documentation links resolve
+        run: |
+          python3 - <<'PY'
+          import re, os, glob, sys
+          bad = []
+          for f in glob.glob('**/*.md', recursive=True):
+              if 'node_modules' in f: continue
+              for l in re.findall(r'\]\((?!http|#)([^)]+)\)', open(f).read()):
+                  p = os.path.normpath(os.path.join(os.path.dirname(f), l.split('#')[0]))
+                  if not os.path.exists(p):
+                      bad.append(f"{f} -> {l}")
+          if bad:
+              print("\n".join(bad)); sys.exit(1)
+          print("all internal links resolve")
+          PY

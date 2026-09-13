@@ -1,0 +1,60 @@
+name: BPF toolchain
+description: clang, bpftool, Go, and a generated vmlinux.h — the prerequisites for compiling this repository
+
+# Every workflow that touches the BPF objects needs the same four things, and
+# each has a non-obvious failure. Copied into six workflows they drift, and the
+# drift shows up as one workflow mysteriously failing to build what another
+# built fine.
+
+inputs:
+  generate:
+    description: Also run bpf2go (compile the BPF objects and their Go bindings)
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        # Deliberately not go-version-file. go.mod records an exact patch
+        # (go 1.25.0) as the language version, and building with that exact
+        # toolchain means every standard-library fix released since is absent
+        # from the binary — govulncheck reports those, correctly, as
+        # vulnerabilities in crypto/tls and crypto/x509, which this agent links
+        # because it exports over TLS. "stable" is the current release, which is
+        # what a build of this should use.
+        go-version: stable
+        cache: true
+
+    - name: Install clang and bpftool
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends clang llvm libbpf-dev
+        # Ubuntu's `bpftool` command is a dispatcher that runs the build
+        # matching `uname -r` and refuses when that exact package is absent.
+        # Runners boot an Azure kernel with no matching linux-tools package, so
+        # the dispatcher always fails there. linux-tools-generic ships a real
+        # binary under a versioned path; use that directly.
+        sudo apt-get install -y linux-tools-common linux-tools-generic
+        BPFTOOL=$(ls -1 /usr/lib/linux-tools/*/bpftool 2>/dev/null | tail -1)
+        [ -x "$BPFTOOL" ] || { echo "no bpftool binary found"; exit 1; }
+        echo "BPFTOOL=$BPFTOOL" >> "$GITHUB_ENV"
+        clang --version | head -1
+        "$BPFTOOL" version | head -1
+
+    - name: Generate vmlinux.h from the runner's BTF
+      shell: bash
+      run: |
+        # Deliberately the runner's own kernel, not the oldest supported one.
+        # CO-RE relocates field offsets at load time against the target kernel's
+        # BTF, so which kernel supplied this header should not matter — and the
+        # kernel matrix is what proves it rather than assuming it.
+        make vmlinux
+        echo "vmlinux.h: $(wc -l < bpf/vmlinux.h) lines, from $(uname -r)"
+
+    - name: Compile BPF objects and Go bindings
+      if: inputs.generate == 'true'
+      shell: bash
+      run: go generate ./...

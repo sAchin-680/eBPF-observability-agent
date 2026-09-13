@@ -1,0 +1,35 @@
+version: 2
+
+# Updates arrive as pull requests and go through the same gates as everything
+# else. Nothing here auto-merges: a dependency bump in this repository can
+# change what gets loaded into the kernel on every node, and "the tests passed"
+# is not the same as "someone looked at it".
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # One pull request for the routine noise, so that a genuinely interesting
+      # update — cilium/ebpf, which is the loader — is not buried among six
+      # OpenTelemetry patch bumps.
+      opentelemetry:
+        patterns: ["go.opentelemetry.io/*"]
+      golang-x:
+        patterns: ["golang.org/x/*"]
+    labels: ["dependencies"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    labels: ["dependencies", "ci"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    labels: ["dependencies"]

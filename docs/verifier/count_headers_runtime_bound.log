@@ -3,7 +3,7 @@ attempt: scan bounded by a length from userspace
 outcome: rejected
 kernel:  6.8.0-138-generic
 
-verification took 21ms
+verification took 47ms
 
 load program: permission denied:
 	func#0 @0
