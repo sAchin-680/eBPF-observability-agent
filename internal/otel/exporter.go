@@ -48,6 +48,12 @@ type Config struct {
 	// AgentVersion is reported on every resource, so telemetry can be
 	// attributed to the agent build that produced it.
 	AgentVersion string
+
+	// NodeName is the host the agent runs on, reported on every resource. It is
+	// what makes a span attributable to the node that captured it, which a
+	// per-node agent needs and the traced service cannot supply. Empty outside a
+	// cluster, and then omitted rather than reported as "".
+	NodeName string
 }
 
 // Exporter turns request records into spans and metrics.
@@ -118,8 +124,7 @@ func (e *Exporter) tracerFor(service string) trace.Tracer {
 
 	tp, ok := e.providers[service]
 	if !ok {
-		res := resource.NewWithAttributes(
-			semconv.SchemaURL,
+		attrs := []attribute.KeyValue{
 			semconv.ServiceName(service),
 			// Telemetry describes the producer, which here is the agent rather
 			// than the service. Without this a consumer cannot distinguish a
@@ -127,7 +132,11 @@ func (e *Exporter) tracerFor(service string) trace.Tracer {
 			semconv.TelemetrySDKName("ebpf-observability-agent"),
 			semconv.TelemetrySDKLanguageGo,
 			attribute.String("telemetry.agent.version", e.cfg.AgentVersion),
-		)
+		}
+		if e.cfg.NodeName != "" {
+			attrs = append(attrs, semconv.K8SNodeName(e.cfg.NodeName))
+		}
+		res := resource.NewWithAttributes(semconv.SchemaURL, attrs...)
 
 		tp = sdktrace.NewTracerProvider(
 			sdktrace.WithResource(res),
