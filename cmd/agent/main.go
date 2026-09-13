@@ -70,6 +70,9 @@ func main() {
 			Insecure:     true,
 			MetricsAddr:  *metricsAddr,
 			AgentVersion: version,
+			// Set by the DaemonSet from spec.nodeName. Absent outside a
+			// cluster, where there is one host and nothing to attribute.
+			NodeName: os.Getenv("NODE_NAME"),
 		})
 		if err != nil {
 			log.Fatalf("starting exporters: %v", err)

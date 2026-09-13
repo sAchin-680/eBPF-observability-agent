@@ -95,7 +95,7 @@ result demonstrates it, and every entry below links to that evidence through
 | OpenTelemetry export to Tempo and Prometheus | Complete |
 | Grafana dashboards, provisioned from version control | Complete |
 | Documented verifier constraint on in-kernel parsing | Complete |
-| Kubernetes DaemonSet deployment | Not started |
+| Kubernetes DaemonSet deployment | Complete |
 | Measured overhead and ring buffer drop-rate benchmarks | Complete |
 | Multi-kernel validation, one binary on 5.15 and 6.8 | Complete |
 | Failure matrix, all four rows | Complete |
@@ -216,6 +216,7 @@ internal/
 samples/                unmodified sample applications for validation
 deploy/
   compose/              local stack: Tempo, Prometheus, Grafana
+  k8s/                  DaemonSet manifests, applied as-is
   helm/                 Kubernetes DaemonSet chart
   terraform/            multi-node test fleet provisioning
 docs/
@@ -257,9 +258,14 @@ memory via uprobes and requires `hostPID` in its Kubernetes deployment. It
 does not run `--privileged`.
 
 The agent needs `CAP_SYS_ADMIN` to attach uprobes — measured, not assumed, and
-close to root. It is still not `--privileged`: confinement stays in place and
-host devices are not exposed. [`docs/capabilities.md`](docs/capabilities.md)
-records what each capability enables and what breaks without it.
+close to root. It also runs with AppArmor unconfined: under the container
+runtime's default profile it starts, reports no error, and traces fewer than
+half the processes on the node. It is still not `--privileged` — seccomp
+filtering and device isolation remain — but the distance is smaller than a
+capability list suggests. [`docs/capabilities.md`](docs/capabilities.md) records
+what each capability enables and what breaks without it;
+[`deploy/k8s/README.md`](deploy/k8s/README.md) records the container-level
+measurements.
 
 Only request metadata is captured — method, path, status, and timing. Request
 and response bodies are never persisted or exported, despite passing through

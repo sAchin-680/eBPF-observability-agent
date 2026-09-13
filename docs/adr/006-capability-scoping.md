@@ -64,8 +64,14 @@ NFR4 said `CAP_BPF` and `CAP_PERFMON`. The document now says what is true and wh
 and links to the experiment.
 
 **The privilege reduction is real but modest.** `CAP_SYS_ADMIN` covers a large
-surface. The honest claim is that confinement remains in place and device access
-does not, not that the agent is unprivileged.
+surface, and a later measurement in a container narrowed the claim further: the
+agent must also run with AppArmor unconfined, because the runtime's default
+profile permits `ptrace` and `/proc` access only against peers under the same
+profile, and under it the agent silently traces containers and not the host —
+3 targets instead of 7, with no error. One of the two confinements
+`--privileged` disables therefore has to be given up regardless. What remains
+is seccomp filtering, device isolation, and an enumerated capability set. The
+honest claim is that, not that the agent is unprivileged.
 
 **The set is kernel-dependent.** It was established on 6.8. A kernel that routes
 uprobe attachment differently would need it re-measured, which is why the script

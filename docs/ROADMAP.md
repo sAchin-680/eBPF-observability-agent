@@ -122,24 +122,26 @@ privileged node-level agent.
 **Deliverables**
 
 - [ ] Canary to full rollout demonstration
-- [ ] Capability scoping documented
+- [x] Capability scoping documented — [capabilities.md](capabilities.md),
+      [ADR-006](adr/006-capability-scoping.md), and the container-level
+      measurements in [`deploy/k8s/README.md`](../deploy/k8s/README.md)
 - [ ] CI matrix across kernel versions, passing
 - [ ] Agent self-health dashboard
 
 **Tasks**
 
-| # | Task |
-| :--- | :--- |
-| 1 | Terraform modules for a multi-node test fleet |
-| 2 | DaemonSet manifest: `hostPID`, hostPath mounts for `/sys/kernel/debug` and `/sys/fs/bpf` |
-| 3 | Scope and document capabilities, with the older-kernel fallback |
-| 4 | Helm chart |
-| 5 | Canary node selector, deployed to one or two nodes |
-| 6 | Canary verification: node CPU, `dmesg`, traced-application health |
-| 7 | ArgoCD sync for full-fleet promotion by Git commit |
-| 8 | GitHub Actions matrix build: compile and test suite per kernel version |
-| 9 | Agent self-health dashboard: desired versus ready, drop rate, per-node CPU and memory |
-| 10 | Canary to full rollout recording |
+| # | Task | State |
+| :--- | :--- | :--- |
+| 1 | Terraform modules for a multi-node test fleet | Not started |
+| 2 | DaemonSet manifest: `hostPID`, hostPath mounts for `/sys/kernel/debug` and `/sys/fs/bpf` | Complete — `deploy/k8s/`, with one read-only tracefs mount rather than two; `/sys/fs/bpf` is not needed and the reason debugfs is, is the exec tracepoint rather than uprobes |
+| 3 | Scope and document capabilities, with the older-kernel fallback | Complete — [capabilities.md](capabilities.md), NFR4 corrected |
+| 4 | Helm chart | Not started |
+| 5 | Canary node selector, deployed to one or two nodes | Not started — `scripts/kind-cluster.yaml` labels two workers `canary` and `stable` |
+| 6 | Canary verification: node CPU, `dmesg`, traced-application health | Not started |
+| 7 | ArgoCD sync for full-fleet promotion by Git commit | Not started |
+| 8 | GitHub Actions matrix build: compile and test suite per kernel version | Not started |
+| 9 | Agent self-health dashboard: desired versus ready, drop rate, per-node CPU and memory | Not started |
+| 10 | Canary to full rollout recording | Not started |
 
 Agent self-health is a separate concern from the telemetry the agent produces
 about traced applications, and belongs on its own dashboard.

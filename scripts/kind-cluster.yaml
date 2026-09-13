@@ -1,0 +1,46 @@
+# A local multi-node cluster for the deployment work.
+#
+# kind rather than k3s or minikube, for one reason that matters here: kind nodes
+# are containers on a single host kernel, so an eBPF agent running in a pod
+# attaches to that one kernel — the same kernel this repository's other tests
+# run against. Multiple VMs would be more faithful to a real fleet but would
+# multiply the kernel surface under test for no benefit at this stage; kernel
+# variation is covered separately and deliberately in docs/kernel-matrix.md.
+#
+# Three nodes, because a canary rollout needs somewhere to be a canary and
+# somewhere to still be running the previous version.
+#
+#   kind create cluster --config scripts/kind-cluster.yaml
+#
+# What kind does NOT reproduce, and it matters for this agent: a kind node is a
+# container running its own systemd as PID 1, so it has its own PID namespace.
+# `hostPID: true` in a pod there means the *node container's* namespace, not the
+# kernel's root namespace — measured: a hostPID pod on ebpf-worker sees 18
+# processes and PID 1 is systemd, while the machine it runs on has 221.
+#
+# The consequence is specific. BPF reports PIDs in the root namespace, so the
+# exec-tracepoint discovery path hands userspace PID numbers that do not exist
+# in the agent's own /proc, and newly started processes are never attached. The
+# startup /proc scan is unaffected, because it enumerates the namespace the
+# agent is actually in, and that namespace does contain the pods on that node.
+#
+# In a real cluster the two namespaces are the same one and the problem does
+# not arise. The faithful test of the node case is therefore a container run
+# directly on a host with --pid=host, which is what deploy/k8s/README.md
+# records. Here, restarting the DaemonSet re-runs the scan and picks up
+# whatever is now running.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: ebpf
+
+nodes:
+  - role: control-plane
+  - role: worker
+    labels:
+      # The canary selector in Phase 4 task 5 targets this label rather than a
+      # node name, so promoting the canary is a label change and not an edit to
+      # the manifest.
+      observability/agent-channel: canary
+  - role: worker
+    labels:
+      observability/agent-channel: stable
