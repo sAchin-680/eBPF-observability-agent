@@ -181,7 +181,19 @@ Ubuntu 24.04 VM with the complete toolchain for development on those hosts.
 
 ## Getting started
 
-Provision the Linux development environment:
+The released image needs no build. It is a distroless image holding a static
+binary with the BPF objects embedded, so nothing about the build host's kernel
+has to match the node it runs on:
+
+```bash
+docker pull ghcr.io/sachin-680/ebpf-observability-agent:v1.0.1
+```
+
+`deploy/helm/ebpf-agent` and `deploy/k8s/` deploy that image as a DaemonSet;
+[`docs/capabilities.md`](docs/capabilities.md) covers the privileges it needs
+and why.
+
+To work on the agent instead, provision the Linux development environment:
 
 ```bash
 limactl start --name=ebpf scripts/lima-ebpf.yaml
@@ -305,6 +317,7 @@ produced it rather than to whatever `main` happens to be.
 | `v0.2-phase2` | Observability pipeline: OpenTelemetry export, dashboards, zero-config acceptance |
 | `v0.3-phase3` | Benchmarks, verifier constraints, kernel matrix, failure matrix |
 | `v1.0-phase4` | Deployment: DaemonSet, Helm, canary rollout, GitOps, CI kernel matrix |
+| `v1.0.1` | The same tree plus the release-pipeline fix, and the first tag to publish an image |
 
 Tag order follows when each phase's work landed, not the numbering: the Phase 1
 demo script merged after Phase 2 was already complete, so `v0.2-phase2` is an
