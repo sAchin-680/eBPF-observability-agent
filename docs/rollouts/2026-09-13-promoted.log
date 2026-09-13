@@ -1,0 +1,63 @@
+   rollout of 0.3.1-phase4 at 2026-09-13T18:14:24Z
+
+1. Where the fleet is now
+   stable: ghcr.io/sachin-680/ebpf-observability-agent:0.2.0-phase2
+   canary: ghcr.io/sachin-680/ebpf-observability-agent:0.3.0-phase4
+   ebpf-control-plane     (stable)
+   ebpf-worker            canary
+   ebpf-worker2           stable
+   1 node(s) will receive 0.3.1-phase4 first
+
+2. 18:14:24Z  Canary: 0.3.1-phase4 onto the labelled node only
+   STATUS: deployed
+   canary running 0.3.1-phase4
+   settling for 60s before measuring
+
+3. 18:15:26Z  Gate: is the canary node as healthy as a stable one
+
+1. Both releases are deployed, on disjoint nodes
+   canary  -> ebpf-worker 
+   stable  -> ebpf-control-plane ebpf-worker2 
+   disjoint: comparing ebpf-worker against ebpf-worker2
+   canary image: ghcr.io/sachin-680/ebpf-observability-agent:0.3.1-phase4
+   stable image: ghcr.io/sachin-680/ebpf-observability-agent:0.2.0-phase2
+
+2. Apply identical load to both nodes
+   300 HTTPS requests on each node, started together
+
+3. Node CPU during the load
+   ebpf-worker (canary)   8.9%
+   ebpf-worker2 (stable)  10.1%
+   within 1.30x of the stable node (ratio 0.88)
+
+4. Traced-application health
+   canary node            RESULT ok=300 failed=0 mean_ms=4.26 p50_ms=3.96
+   stable node            RESULT ok=300 failed=0 mean_ms=4.25 p50_ms=3.95
+   median request within 1.25x of stable (ratio 1.00)
+
+5. Kernel log
+   kind shares one kernel across all nodes; this is host-wide, not per-node
+   no BPF, uprobe, verifier or taint messages since this run started
+
+6. Agent self-health
+   canary   canary-ebpf-agent-4mwhw      ebpf-worker          restarts=0   drops=0     attached=1
+   stable   stable-ebpf-agent-7jw7t      ebpf-worker2         restarts=0   drops=0     attached=3
+
+Verdict
+   PASS — the canary node is as healthy as the stable node on every axis
+          promote with: kubectl label node ebpf-worker observability/agent-channel-
+   gate passed
+
+4. 18:16:01Z  Fleet: the same build to everything else
+   STATUS: deployed
+   daemon set "stable-ebpf-agent" successfully rolled out
+   fleet running 0.3.1-phase4
+
+5. 18:16:05Z  Result
+   stable: ghcr.io/sachin-680/ebpf-observability-agent:0.3.1-phase4
+   canary: ghcr.io/sachin-680/ebpf-observability-agent:0.3.1-phase4
+   canary-ebpf-agent-4mwhw      Running    ebpf-worker
+   stable-ebpf-agent-k7jcx      Running    ebpf-worker2
+   stable-ebpf-agent-rvqng      Running    ebpf-control-plane
+   PASS — 0.3.1-phase4 on every node, promoted only after the gate
+   transcript: docs/rollout-20260913-234424.log

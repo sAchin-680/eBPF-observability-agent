@@ -1,0 +1,246 @@
+{
+  "title": "eBPF agent — fleet health",
+  "uid": "ebpf-agent-health",
+  "tags": ["ebpf", "agent", "self-health"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "release",
+        "label": "Release",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(ebpf_agent_targets_attached, release)",
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Is the fleet covered?",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "Agents desired vs ready",
+      "description": "The only panel that can show a MISSING agent. An agent that is not running reports no metrics, and absent metrics look identical to a quiet node — so this comes from the DaemonSet controller, not from the agent. Desired above ready means some node is not being traced at all.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 1 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(kube_daemonset_status_desired_number_scheduled{namespace=\"ebpf-observability\"})",
+          "legendFormat": "desired"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(kube_daemonset_status_number_ready{namespace=\"ebpf-observability\"})",
+          "legendFormat": "ready"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "textMode": "value_and_name"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Targets attached, per node",
+      "description": "A healthy-looking agent attached to nothing is this project's defining failure: it runs, serves metrics, reports Ready, and produces no telemetry. Readiness deliberately does not gate on this, because a node running no TLS workload legitimately has zero — so it is read here, in context, against the other nodes.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 10, "x": 6, "y": 1 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "ebpf_agent_targets_attached{release=~\"$release\"}",
+          "legendFormat": "{{node}} ({{release}})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "lineWidth": 2, "fillOpacity": 5 } },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Which build is on which node",
+      "description": "During a canary this is the rollout itself: one series per node, valued by the image tag it is running. Promotion appears here as a node changing series.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 1 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count by (node, release) (ebpf_agent_targets_attached{release=~\"$release\"})",
+          "legendFormat": "{{node}} — {{release}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "lineWidth": 2, "fillOpacity": 20, "stacking": { "mode": "normal" } } },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "Is it losing data?",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Ring buffer drops per second",
+      "description": "The one failure that corrupts telemetry rather than delaying it. Phase 3 measured the onset between 8,000 and 12,000 events/s; anything above zero here means the agent is producing an incomplete picture while continuing to look healthy.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(ebpf_agent_events_dropped_total{release=~\"$release\"}[5m])",
+          "legendFormat": "{{node}} ({{release}})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.01 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Events received per second",
+      "description": "The denominator for the drop rate. A drop count of zero means nothing on its own if the agent is also receiving nothing.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(ebpf_agent_events_received_total{release=~\"$release\"}[5m])",
+          "legendFormat": "{{node}} ({{release}})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "lineWidth": 2, "fillOpacity": 10 } },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "What is it costing the node?",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Agent CPU, per node",
+      "description": "From cAdvisor rather than from the agent, so it includes everything the process costs. Deliberately has no CPU limit in the manifest: throttling the agent under a traffic spike converts a CPU problem into dropped events, which is the worse failure.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (node) (rate(container_cpu_usage_seconds_total{namespace=\"ebpf-observability\", container=\"agent\"}[5m]))",
+          "legendFormat": "{{node}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit", "custom": { "lineWidth": 2, "fillOpacity": 10 } },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Agent memory, per node",
+      "description": "Working set against the 512Mi limit. This limit is kept where the CPU one is not: an agent leaking memory should be killed rather than left to pressure the node it exists to observe.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 16 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (node) (container_memory_working_set_bytes{namespace=\"ebpf-observability\", container=\"agent\"})",
+          "legendFormat": "{{node}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "bytes", "custom": { "lineWidth": 2, "fillOpacity": 10 } },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Restarts",
+      "description": "A crash-looping agent reports Ready between crashes and its metrics reset each time, so a counter graph looks merely quiet. This is where it shows.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 16 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (node) (kube_pod_container_status_restarts_total{namespace=\"ebpf-observability\", container=\"agent\"})",
+          "legendFormat": "{{node}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "Backlog",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests awaiting a response",
+      "description": "Requests seen with no response yet. A steady number is normal — it is in-flight work. A rising one means responses are not being matched, which shows up downstream as spans that expire rather than complete.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 24 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "ebpf_agent_requests_pending{release=~\"$release\"}",
+          "legendFormat": "{{node}} ({{release}})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "lineWidth": 2, "fillOpacity": 10 } },
+        "overrides": []
+      }
+    }
+  ]
+}

@@ -3,6 +3,7 @@
 package correlate
 
 import (
+	"sync"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -131,10 +132,24 @@ type Stats struct {
 
 // Correlator pairs requests with responses per connection.
 //
-// It is not safe for concurrent use; the agent drives it from a single reader.
+// Safe for concurrent use. It was not, and the comment here used to say so on
+// the grounds that the agent drives it from a single reader goroutine — which
+// was true when it was written and stopped being true the moment expiry moved
+// onto a ticker. Three goroutines reach this state in the running agent: the
+// ring buffer reader calls Handle, a timer calls Expire, and the metrics
+// callback calls Pending and Stats. The result was a hard crash in production,
+// not a subtle one:
+//
+//	fatal error: concurrent map iteration and map write
+//
+// Records are emitted outside the lock. emit ends in an OTLP exporter, and
+// holding the correlator's mutex across a network client would make export
+// latency into ring buffer back-pressure — which is the path that drops events.
 type Correlator struct {
 	ttl  time.Duration
 	emit func(Record)
+
+	mu sync.Mutex
 
 	// endpoints resolves a connection to its socket addresses. Optional: when
 	// nil, records carry no endpoints and everything else is unaffected.
@@ -173,6 +188,23 @@ func New(ttl time.Duration, emit func(Record)) *Correlator {
 
 // Handle processes one captured payload.
 func (c *Correlator) Handle(ev capture.Event) {
+	out := c.handleLocked(ev)
+	if c.emit == nil {
+		return
+	}
+	for _, r := range out {
+		c.emit(r)
+	}
+}
+
+// handleLocked does the state changes under the lock and returns what should be
+// emitted once it is released.
+func (c *Correlator) handleLocked(ev capture.Event) []Record {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var out []Record
+
 	if ev.Timestamp > c.now {
 		c.now = ev.Timestamp
 	}
@@ -180,7 +212,7 @@ func (c *Correlator) Handle(ev capture.Event) {
 	msg, ok := httpparse.Parse(ev.Data)
 	if !ok {
 		c.stats.NotHTTP++
-		return
+		return out
 	}
 
 	key := connKey{pid: ev.PID, conn: ev.Conn}
@@ -195,7 +227,7 @@ func (c *Correlator) Handle(ev capture.Event) {
 		// as expired rather than discarded, so the traffic is not lost.
 		if prev, exists := c.pending[key]; exists {
 			c.stats.Expired++
-			c.emitRecord(prev, httpparse.Message{}, 0, Expired)
+			out = append(out, c.buildRecord(prev, httpparse.Message{}, 0, Expired))
 		}
 		c.pending[key] = pending{msg: msg, ev: ev, seen: ev.Timestamp}
 
@@ -205,12 +237,14 @@ func (c *Correlator) Handle(ev capture.Event) {
 			// A response with no matching request: the request predates the
 			// agent's attachment, or was dropped.
 			c.stats.ResponsesUnmatched++
-			return
+			return out
 		}
 		delete(c.pending, key)
 		c.stats.Completed++
-		c.emitRecord(req, msg, ev.Timestamp-req.seen, Completed)
+		out = append(out, c.buildRecord(req, msg, ev.Timestamp-req.seen, Completed))
 	}
+
+	return out
 }
 
 // Expire reports every pending request older than the TTL.
@@ -218,26 +252,46 @@ func (c *Correlator) Handle(ev capture.Event) {
 // Called periodically by the agent. Expiry is by event time, so a quiet period
 // with no traffic does not expire anything until the next event arrives.
 func (c *Correlator) Expire() {
+	c.mu.Lock()
+	var out []Record
 	for key, p := range c.pending {
 		if c.now-p.seen < c.ttl {
 			continue
 		}
 		delete(c.pending, key)
 		c.stats.Expired++
-		c.emitRecord(p, httpparse.Message{}, 0, Expired)
+		out = append(out, c.buildRecord(p, httpparse.Message{}, 0, Expired))
+	}
+	c.mu.Unlock()
+
+	if c.emit == nil {
+		return
+	}
+	for _, r := range out {
+		c.emit(r)
 	}
 }
 
 // Pending reports how many requests are awaiting a response.
-func (c *Correlator) Pending() int { return len(c.pending) }
+//
+// Called from the metrics callback, on its own goroutine: len() on a map being
+// written concurrently is a race like any other.
+func (c *Correlator) Pending() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.pending)
+}
 
 // Stats returns a snapshot of the counters.
-func (c *Correlator) Stats() Stats { return c.stats }
+func (c *Correlator) Stats() Stats {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.stats
+}
 
-func (c *Correlator) emitRecord(req pending, resp httpparse.Message, d time.Duration, o Outcome) {
-	if c.emit == nil {
-		return
-	}
+// buildRecord assembles a record. It is called with the lock held and must not
+// emit: see the note on Correlator.
+func (c *Correlator) buildRecord(req pending, resp httpparse.Message, d time.Duration, o Outcome) Record {
 	var local, peer string
 	if c.endpoints != nil {
 		local, peer, _ = c.endpoints(req.ev.PID, req.ev.Conn)
@@ -248,7 +302,7 @@ func (c *Correlator) emitRecord(req pending, resp httpparse.Message, d time.Dura
 		kind = Client
 	}
 
-	c.emit(Record{
+	return Record{
 		Kind:      kind,
 		StartWall: c.bootTime.Add(req.seen),
 		Method:    req.msg.Method,
@@ -264,7 +318,7 @@ func (c *Correlator) emitRecord(req pending, resp httpparse.Message, d time.Dura
 		Outcome:   o,
 		Local:     local,
 		Peer:      peer,
-	})
+	}
 }
 
 // estimateBootTime returns the wall-clock instant corresponding to monotonic
