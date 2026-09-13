@@ -1,0 +1,30 @@
+apiVersion: v2
+name: ebpf-agent
+description: Zero-instrumentation eBPF observability agent, one pod per node
+type: application
+
+# The chart version and the agent version move independently: a change to the
+# rollout mechanics is not a change to what gets rolled out, and conflating
+# them makes "which agent is on that node" unanswerable from the release alone.
+version: 0.1.0
+appVersion: "0.2.0-phase2"
+
+keywords:
+  - ebpf
+  - observability
+  - tracing
+  - opentelemetry
+
+home: https://github.com/sAchin-680/eBPF-observability-agent
+sources:
+  - https://github.com/sAchin-680/eBPF-observability-agent
+
+# The agent loads BPF programs and attaches uprobes to other processes. It
+# needs capabilities that Pod Security Admission's baseline profile forbids,
+# and a kernel with CONFIG_DEBUG_INFO_BTF=y. Both are covered in the README;
+# neither is something to discover at rollout time.
+annotations:
+  observability/privileged: "true"
+  observability/min-kernel: "5.8"
+
+kubeVersion: ">=1.30.0-0"

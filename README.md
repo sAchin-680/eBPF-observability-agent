@@ -217,7 +217,7 @@ samples/                unmodified sample applications for validation
 deploy/
   compose/              local stack: Tempo, Prometheus, Grafana
   k8s/                  DaemonSet manifests, applied as-is
-  helm/                 Kubernetes DaemonSet chart
+  helm/                 the same DaemonSet as a chart, with canary overlays
   terraform/            multi-node test fleet provisioning
 docs/
   adr/                  architecture decision records

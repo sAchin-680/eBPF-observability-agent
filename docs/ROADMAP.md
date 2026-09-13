@@ -135,8 +135,8 @@ privileged node-level agent.
 | 1 | Terraform modules for a multi-node test fleet | Not started |
 | 2 | DaemonSet manifest: `hostPID`, hostPath mounts for `/sys/kernel/debug` and `/sys/fs/bpf` | Complete — `deploy/k8s/`, with one read-only tracefs mount rather than two; `/sys/fs/bpf` is not needed and the reason debugfs is, is the exec tracepoint rather than uprobes |
 | 3 | Scope and document capabilities, with the older-kernel fallback | Complete — [capabilities.md](capabilities.md), NFR4 corrected |
-| 4 | Helm chart | Not started |
-| 5 | Canary node selector, deployed to one or two nodes | Not started — `scripts/kind-cluster.yaml` labels two workers `canary` and `stable` |
+| 4 | Helm chart | Complete — `deploy/helm/ebpf-agent`, with a drift check against `deploy/k8s/` in `make verify` |
+| 5 | Canary node selector, deployed to one or two nodes | Complete — two releases of one chart on a three-node cluster; promotion is a node label change |
 | 6 | Canary verification: node CPU, `dmesg`, traced-application health | Not started |
 | 7 | ArgoCD sync for full-fleet promotion by Git commit | Not started |
 | 8 | GitHub Actions matrix build: compile and test suite per kernel version | Not started |

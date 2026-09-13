@@ -1,0 +1,30 @@
+{{ include "ebpf-agent.fullname" . }} installed into namespace {{ include "ebpf-agent.namespace" . }}.
+
+  image:    {{ include "ebpf-agent.image" . }}
+  traces:   {{ if .Values.otlpEndpoint }}{{ .Values.otlpEndpoint }}{{ else }}export disabled — metrics only{{ end }}
+  metrics:  :{{ .Values.metrics.port }}/metrics
+  nodes:    {{ if .Values.nodeSelector }}{{ toJson .Values.nodeSelector }}{{ else }}all nodes, tainted ones included{{ end }}
+
+Check the rollout:
+
+  kubectl -n {{ include "ebpf-agent.namespace" . }} rollout status ds/{{ include "ebpf-agent.fullname" . }}
+  kubectl -n {{ include "ebpf-agent.namespace" . }} logs ds/{{ include "ebpf-agent.fullname" . }} | head
+
+A healthy agent logs how many targets it attached at startup. That number is
+the thing to look at: the pod reports Ready as soon as it serves metrics, which
+it will do whether or not it attached to anything.
+
+Zero targets on a node running TLS workloads means coverage was lost silently.
+The usual causes, in order of likelihood:
+
+  1. AppArmor is enforcing a profile on the pod. The agent then sees only
+     processes under the same profile. This chart sets it Unconfined; a cluster
+     policy may override that.
+  2. The node's kernel lacks CONFIG_DEBUG_INFO_BTF=y, so CO-RE cannot relocate.
+     This fails loudly at startup rather than silently.
+  3. The workloads statically link their TLS library, leaving no shared object
+     to attach to.
+
+This agent runs with CAP_SYS_ADMIN and hostPID. It can read plaintext for every
+process on the node; only method, path, status and timing ever leave it. See
+docs/capabilities.md.

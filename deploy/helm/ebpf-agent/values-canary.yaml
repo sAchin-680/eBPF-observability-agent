@@ -1,0 +1,25 @@
+# Canary overlay.
+#
+# A canary here is the same chart installed a second time, under its own release
+# name, restricted to nodes carrying a label. Nothing about the configuration
+# differs from the stable release except the image tag and where it runs — which
+# is the point: what is on trial is the build, not the settings.
+#
+#   helm install canary deploy/helm/ebpf-agent -n ebpf-observability \
+#     -f deploy/helm/ebpf-agent/values-canary.yaml \
+#     --set image.tag=<new build>
+#
+# The namespace already exists, applied once from deploy/k8s/00-namespace.yaml
+# with the Pod Security Admission labels the agent needs. Neither release owns
+# it, which is deliberate: uninstalling one must not take the other down.
+#
+# The stable release must be pinned to the complementary label first, or both
+# releases schedule a pod onto the canary node and the DaemonSets fight over it:
+#
+#   helm upgrade stable deploy/helm/ebpf-agent \
+#     --set nodeSelector."observability/agent-channel"=stable
+#
+# Promotion is then a label change on the nodes, not an edit to either release.
+
+nodeSelector:
+  observability/agent-channel: canary

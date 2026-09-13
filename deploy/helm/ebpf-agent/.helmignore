@@ -1,0 +1,8 @@
+.DS_Store
+.git/
+.gitignore
+*.tmp
+*.orig
+*.swp
+# Rendered output kept for diffing against deploy/k8s/; not part of the chart.
+rendered/

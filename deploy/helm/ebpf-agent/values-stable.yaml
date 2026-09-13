@@ -1,0 +1,27 @@
+# Stable overlay — everything that is not the canary.
+#
+#   helm install stable deploy/helm/ebpf-agent -n ebpf-observability \
+#     -f deploy/helm/ebpf-agent/values-stable.yaml
+#
+# The obvious way to write this is a nodeSelector for
+# observability/agent-channel=stable, mirroring the canary. It is wrong, and the
+# failure is silent: a node that carries neither label is then covered by
+# neither release, so it runs no agent and reports nothing — which looks exactly
+# like a node with no traffic.
+#
+# Expressed as "not the canary" instead, the default is coverage. A node has to
+# be explicitly labelled canary to leave the stable release, and a newly joined
+# node is traced from the moment it is ready without anyone remembering to
+# label it.
+#
+# Promotion then needs no edit to either release: remove the canary label and
+# the node returns to stable.
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: observability/agent-channel
+              operator: NotIn
+              values:
+                - canary

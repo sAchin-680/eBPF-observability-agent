@@ -1,0 +1,180 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "ebpf-agent.fullname" . }}
+  namespace: {{ include "ebpf-agent.namespace" . }}
+  labels:
+    {{- include "ebpf-agent.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "ebpf-agent.selectorLabels" . | nindent 6 }}
+  updateStrategy:
+    {{- toYaml .Values.updateStrategy | nindent 4 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ebpf-agent.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- if .Values.metrics.annotations }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.metrics.port | quote }}
+        prometheus.io/path: /metrics
+        {{- end }}
+        {{- /*
+          The pre-1.30 spelling of securityContext.appArmorProfile below. Both
+          are set: the annotation is ignored by newer API servers and the field
+          by older ones, and the cost of the wrong one taking effect is silent
+          under-coverage rather than a visible failure.
+        */}}
+        container.apparmor.security.beta.kubernetes.io/agent: unconfined
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- if .Values.rbac.create }}
+      serviceAccountName: {{ include "ebpf-agent.fullname" . }}
+      {{- end }}
+      automountServiceAccountToken: false
+
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      # Discovery reads each process's mapped libraries through /proc and
+      # reaches into container filesystems via /proc/<pid>/root. Without the
+      # host PID namespace the agent sees only itself.
+      hostPID: true
+
+      # Deliberately not hostNetwork: the agent listens on one port, for
+      # metrics, and placing that on the host network risks a collision for no
+      # gain. Traces leave over an outbound OTLP connection.
+      hostNetwork: false
+      dnsPolicy: ClusterFirst
+
+      priorityClassName: {{ .Values.priorityClassName }}
+
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      # Long enough to detach probes and flush pending spans; the shutdown path
+      # allows 10s for the flush.
+      terminationGracePeriodSeconds: 30
+
+      securityContext:
+        # Measured, not assumed. Under the runtime's default AppArmor profile
+        # the agent starts, logs no error, reports itself healthy, and traces 3
+        # of 7 processes on the node: the profile permits ptrace and /proc
+        # access only against peers under the same profile, so it sees other
+        # containers and is blind to the host.
+        appArmorProfile:
+          type: Unconfined
+        # Kept deliberately. Tested with seccomp unconfined the agent behaves
+        # identically, so the default profile costs nothing; bpf() and
+        # perf_event_open() pass because the container holds CAP_SYS_ADMIN.
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: agent
+          image: {{ include "ebpf-agent.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --otlp-endpoint={{ .Values.otlpEndpoint }}
+            - --metrics-addr=:{{ .Values.metrics.port }}
+          env:
+            # Reported as a resource attribute on every span, so a trace can be
+            # attributed to the node that captured it.
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+
+          # Fixed, not configurable. Each entry was established by removing it
+          # and observing what broke: docs/capabilities.md and ADR-006. NFR4
+          # originally called for CAP_BPF and CAP_PERFMON alone, which cannot
+          # start the agent. CAP_SYS_ADMIN is close to root and is stated as
+          # such; what this is not is privileged: true, which additionally
+          # exposes every host device.
+          securityContext:
+            privileged: false
+            # uid 0 is required: traversing /proc/<pid>/root into another
+            # container's filesystem is not reachable by an unprivileged uid
+            # even holding CAP_DAC_READ_SEARCH.
+            runAsUser: 0
+            runAsNonRoot: false
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: true  # required for file capabilities to apply
+            capabilities:
+              drop: ["ALL"]
+              add:
+                - BPF                 # load programs, create maps
+                - PERFMON             # perf subsystem; see ADR-006 on why it is kept
+                - SYS_ADMIN           # attach uprobes via perf_event_open
+                - SYS_PTRACE          # read other processes' /proc entries
+                - DAC_READ_SEARCH     # read /proc/self/mem and files via /proc/<pid>/root
+
+          # Liveness only, and it means "the process is serving", not "the agent
+          # is capturing". Readiness gated on attached targets would be wrong: a
+          # node running no TLS workload legitimately has zero, and a probe
+          # failing there would evict the agent from exactly the nodes where a
+          # workload is about to start. Attach counts belong on the self-health
+          # dashboard, where zero can be read in context.
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            failureThreshold: 3
+
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+          volumeMounts:
+            - name: tracefs
+              mountPath: {{ .Values.tracefsPath }}
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+
+      # One hostPath, read-only.
+      #
+      # tracefs is required, and not for the reason usually assumed: uprobes go
+      # through perf_event_open on every supported kernel. It is the
+      # sched_process_exec tracepoint, whose numeric id is readable only here.
+      #
+      # /sys/fs/bpf is not mounted. It exists for pinning programs so they
+      # outlive the process, and the agent pins nothing — its probes are torn
+      # down with it, so a crashed agent leaves no kernel state behind.
+      #
+      # /sys is mounted read-only by the runtime, which is where the BTF that
+      # CO-RE relocations need is read from. hostPID supplies /proc.
+      volumes:
+        - name: tracefs
+          hostPath:
+            path: {{ .Values.tracefsPath }}
+            type: Directory
+        # readOnlyRootFilesystem leaves the process no writable path; this is
+        # the only one it gets.
+        - name: tmp
+          emptyDir: {}
