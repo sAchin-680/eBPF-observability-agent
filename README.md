@@ -327,4 +327,4 @@ ancestor of `v0.1-phase1`.
 
 ## License
 
-Not yet licensed.
+Apache License 2.0. See [`LICENSE`](LICENSE).
