@@ -22,7 +22,7 @@
 # probes are written against arrived in libbpf 1.2, and bookworm ships 1.1.2.
 # Against that header the programs fail to compile with "expected identifier",
 # which reads like a syntax error in our own C rather than a missing macro.
-FROM golang:1.25-trixie AS builder
+FROM golang:1.27-trixie AS builder
 
 # clang with the BPF backend, and libbpf's headers for bpf_helpers.h.
 # bpftool is absent on purpose: the one thing it would be used for, generating
