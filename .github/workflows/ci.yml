@@ -23,7 +23,7 @@ jobs:
     name: format and static analysis
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/bpf-toolchain
 
       - name: gofmt
@@ -57,7 +57,7 @@ jobs:
     name: unit tests
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/bpf-toolchain
 
       - name: Unit tests
@@ -73,7 +73,7 @@ jobs:
     name: build
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/bpf-toolchain
 
       - name: Build the agent
