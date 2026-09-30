@@ -46,7 +46,7 @@ jobs:
           go test -c -o dist/verifier.test ./test/verifier
           sha256sum dist/* | tee dist/SHA256SUMS
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -105,7 +105,7 @@ jobs:
           # when every check inside the VM failed.
           grep -q "0 failed" smoke.log
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: smoke-${{ matrix.kernel }}
