@@ -1,6 +1,6 @@
 module github.com/sAchin-680/ebpf-observability-agent
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/cilium/ebpf v0.22.0
@@ -13,7 +13,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.46.0
 	go.opentelemetry.io/otel/sdk/metric v1.46.0
 	go.opentelemetry.io/otel/trace v1.46.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/sys v0.48.0
 )
 
 require (
