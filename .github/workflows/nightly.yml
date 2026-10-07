@@ -25,7 +25,7 @@ jobs:
     name: fuzz the parsers
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/bpf-toolchain
 
       - name: Fuzz the HTTP parser
@@ -47,7 +47,7 @@ jobs:
     name: resource cleanup
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/bpf-toolchain
 
       - name: Build

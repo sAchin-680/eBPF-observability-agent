@@ -23,7 +23,7 @@ jobs:
     name: known vulnerabilities
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/bpf-toolchain
 
       - name: govulncheck
@@ -38,7 +38,7 @@ jobs:
     name: deployment manifests
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: The privilege set has not quietly grown
         run: |
